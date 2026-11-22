@@ -45,3 +45,9 @@ textarea.input{flex:1;min-width:0;resize:none;overflow:hidden;border:none;outlin
   padding:9px 14px;border-radius:6px;font-size:13px;z-index:20;max-width:calc(100% - 32px)}
 button:focus-visible,.btn:focus-within{outline:2px solid var(--focus);outline-offset:1px}
 @media (max-width:520px){.hint{display:none}}
+.statusbar .left{display:flex;align-items:center;gap:10px}
+#btn-stop{font:12px var(--ui);padding:1px 8px;border:1px solid #c00000;color:#c00000;background:#fff;border-radius:3px;cursor:pointer}
+.group.running::before{border-color:#c08a00}
+.group.running .output{opacity:.45}
+.output .plot.plot3d{height:460px}
+.output .plot.animated{height:470px}

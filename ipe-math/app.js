@@ -7,15 +7,21 @@ const statusEl = document.getElementById('status');
 const STORAGE_KEY = 'ipe-math-worksheet-v3';
 
 const HELP = `Comandos (sintaxe do Maple). Termine com ; para ver o resultado ou : para ocultar.
-  Definições:  f := x -> x^2 + 1;    a := 3;    g := unapply(x^2, x);    restart;
-  Cálculo:     diff(f(x), x);   int(f(x), x = 0 .. 1);   limit(sin(x)/x, x = 0);   taylor(exp(x), x = 0, 6);   sum(k^2, k = 1 .. n);
-  Equações:    solve(x^2 - 4 = 0, x);   solve({x + y = 3, x - y = 1}, {x, y});   fsolve(cos(x) = x, x);
-  Álgebra:     factor  expand  simplify  normal  subs(x = 2, expr)  eval(expr, x = 2)  convert(expr, parfrac, x)
-  Numérico:    evalf(Pi);   evalf[15](sqrt(2));   Digits := 20;   ifactor(360);   isprime(97);
-  Matrizes:    with(LinearAlgebra):   A := Matrix([[1, 2], [3, 4]]);   Determinant(A);   MatrixInverse(A);   Eigenvalues(A);   A . A;
-  Gráficos:    plot(sin(x), x = -Pi .. Pi);   plot([f(x), g(x)], x = 0 .. 5);   plot3d(x^2 - y^2, x = -2 .. 2, y = -2 .. 2);
+  Definições:  f := x -> x^2 + 1;    a := 3;    g := unapply(x^2, x);    x := 'x';    restart;
+  Derivadas:   diff(f(x), x);   diff(f(x), x$2);   D(f);   D(f)(2);   f'(x);   implicitdiff(x^2 + y^2 = 1, y, x);
+  Cálculo:     int(f(x), x = 0 .. 1);   limit(sin(x)/x, x = 0);   limit(1/x, x = 0, right);   taylor(exp(x), x = 0, 6);   sum(k^2, k = 1 .. n);
+  Equações:    solve(x^2 - 4 = 0, x);   S := solve({x + y = 3, x - y = 1}, {x, y});   assign(S);   fsolve(cos(x) = x, x);
+  Álgebra:     factor  expand  simplify  normal  subs(x = 2, expr)  eval(expr, x = 2)  evalb(a = b)  map(x -> x^2, L)
+  Numérico:    evalf(Pi);   evalf[15](sqrt(2));   Digits := 15;   ifactor(360);   isprime(97);
+  Matrizes:    with(LinearAlgebra):   A := Matrix([[1, 2], [3, 4]]);   v := <1, 2>;   Determinant(A);   Eigenvalues(A);   A . v;
+  Gráficos:    plot(sin(x), x = -Pi .. Pi);   plot([cos(t), sin(t), t = 0 .. 2*Pi]);   plot3d(x^2 - y^2, x = -2 .. 2, y = -2 .. 2);
+  with(plots): p1 := plot(f(x), x = 0 .. 2):  p2 := plot(x, x = 0 .. 2, color = blue):  display(p1, p2);
+               implicitplot(x^2 + y^2 = 4, x = -3 .. 3, y = -3 .. 3);   pointplot([[1, 2], [2, 3]]);   polarplot(1 + cos(t));
+               animate(plot, [sin(k*x), x = 0 .. 2*Pi], k = 1 .. 3);   contourplot  densityplot  fieldplot  spacecurve  textplot  logplot  inequal
+  Programação: for i from 1 to 5 do i^2 end do;   while k < 10 do k := k + 1 end do;   if x > 0 then 1 else -1 end if;
+               F := proc(n) local r; r := n^2; return r end proc;   printf("%d\\n", 42);   seq(i^2, i = 1 .. 5);   add(k, k = 1 .. 100);
   Histórico:   %  (último resultado)   %%   %%%
-Atalhos: Enter executa · Shift+Enter nova linha · Ctrl+J novo prompt abaixo · Ctrl+K novo prompt acima · Ctrl+T texto · Ctrl+Delete apaga o grupo`;
+Atalhos: Enter executa · Shift+Enter nova linha · Ctrl+J novo prompt abaixo · Ctrl+K acima · Ctrl+T texto · Ctrl+Delete apaga o grupo · ■ Interromper para cálculos longos`;
 
 /* ---------- Saída ---------- */
 
@@ -34,13 +40,18 @@ function renderOutput(outEl, blocks) {
     else if (b.plot) {
       div.className = 'plot';
       outEl.appendChild(div);
+      const P = b.plot;
       const layout = Object.assign({
-        margin: { l: 50, r: 20, t: b.plot.layout.title ? 40 : 16, b: 40 },
         paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff', font: { color: '#000000', family: 'Times New Roman, serif' },
-      }, b.plot.layout);
-      layout.xaxis = Object.assign({ gridcolor: '#eeeeee', zerolinecolor: '#000000' }, layout.xaxis);
-      layout.yaxis = Object.assign({ gridcolor: '#eeeeee', zerolinecolor: '#000000' }, layout.yaxis);
-      Plotly.newPlot(div, b.plot.data, layout, { responsive: true, displaylogo: false });
+      }, P.layout);
+      layout.margin = Object.assign({ l: 50, r: 20, t: P.layout.title ? 40 : 16, b: 40 }, P.layout.margin || {});
+      if (P.is3d) { div.classList.add('plot3d'); layout.margin = Object.assign({ l: 0, r: 0, t: P.layout.title ? 40 : 0, b: 0 }, P.layout.margin || {}); }
+      else {
+        layout.xaxis = Object.assign({ gridcolor: '#eeeeee', zerolinecolor: '#000000' }, layout.xaxis);
+        layout.yaxis = Object.assign({ gridcolor: '#eeeeee', zerolinecolor: '#000000' }, layout.yaxis);
+      }
+      if (P.animated) div.classList.add('animated');
+      Plotly.newPlot(div, { data: P.data, layout, frames: P.frames || [], config: { responsive: true, displaylogo: false } });
       continue;
     }
     outEl.appendChild(div);
@@ -123,19 +134,88 @@ function deleteCell(cell) {
   save();
 }
 
-function runCell(cell) {
+/* ---------- Motor de cálculo em segundo plano (Web Worker) ----------
+ * Um cálculo travado não congela a página: o botão Interromper encerra o worker,
+ * cria outro e refaz em silêncio as instruções já executadas para restaurar a sessão. */
+const NERDAMER_URL = 'https://cdn.jsdelivr.net/npm/nerdamer@1.1.13/all.min.js';
+const Engine = (() => {
+  let worker = null, mode = 'worker', seq = 0, log = [], busy = 0;
+  const pending = new Map();
+  const local = (op, text) => Promise.resolve(op === 'reset' ? (MapleKernel.reset(), []) : MapleKernel.evaluateCell(text));
+  function spawn() {
+    const src = `importScripts(${JSON.stringify(NERDAMER_URL)});\n${MapleKernelFactory.toString()}\nMapleKernelFactory(self);\n` +
+      `self.onmessage = e => { const { id, op, text } = e.data; let blocks = [];` +
+      ` try { if (op === 'reset') MapleKernel.reset(); else if (op !== 'ping') blocks = MapleKernel.evaluateCell(text); }` +
+      ` catch (err) { blocks = [{ error: 'Error, ' + (err && err.message || err) }]; } self.postMessage({ id, blocks }); };`;
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    worker = new Worker(url);
+    worker.onmessage = e => { const p = pending.get(e.data.id); if (p) { pending.delete(e.data.id); p.resolve(e.data.blocks); } };
+    worker.onerror = ev => { ev.preventDefault(); fallback(); };
+  }
+  function fallback() { // sem worker (navegador antigo ou bloqueado): calcula na própria página
+    if (mode === 'local') return;
+    mode = 'local';
+    try { worker && worker.terminate(); } catch (e) {}
+    worker = null;
+    for (const [, p] of pending) p.resolve(null);
+    pending.clear();
+    MapleKernel.reset();
+    for (const t of log) MapleKernel.evaluateCell(t);
+  }
+  function post(op, text) {
+    if (mode === 'local') return local(op, text);
+    return new Promise(resolve => { const id = ++seq; pending.set(id, { resolve }); worker.postMessage({ id, op, text }); });
+  }
+  async function call(op, text) {
+    busy++; showBusy(true);
+    try {
+      let r = await post(op, text);
+      if (r === null) r = await local(op, text);
+      if (op === 'reset') log = [];
+      else if (op === 'eval') log.push(text);
+      return r;
+    } finally { busy--; if (!busy) showBusy(false); }
+  }
+  async function interrupt() {
+    if (mode === 'local' || !busy) return;
+    worker.terminate();
+    for (const [, p] of pending) p.resolve([{ error: 'Warning, computation interrupted' }]);
+    pending.clear();
+    spawn();
+    setStatus('Restaurando a sessão…');
+    for (const t of log) await post('eval', t);
+    setStatus('Interrompido');
+  }
+  try {
+    spawn();
+    const t = setTimeout(fallback, 15000);
+    post('ping').then(r => { if (r) clearTimeout(t); });
+  } catch (e) { mode = 'local'; }
+  return { eval: text => call('eval', text), reset: () => call('reset'), interrupt, get mode() { return mode; } };
+})();
+
+const btnStop = document.getElementById('btn-stop');
+btnStop.onclick = () => Engine.interrupt();
+function showBusy(on) { btnStop.hidden = !on; document.body.classList.toggle('busy', on); }
+
+async function runCell(cell) {
   const src = cell.querySelector('textarea').value;
   const out = cell.querySelector('.output');
   if (/^\s*\?/.test(src)) { renderOutput(out, [{ note: HELP }]); return; }
+  if (!src.trim()) { renderOutput(out, []); return; }
+  cell.classList.add('running');
   setStatus('Calculando…');
   const t0 = performance.now();
-  renderOutput(out, MapleKernel.evaluateCell(src));
+  const blocks = await Engine.eval(src);
+  cell.classList.remove('running');
+  if (!cell.isConnected) return;
+  renderOutput(out, blocks);
   setStatus(`Pronto · ${((performance.now() - t0) / 1000).toFixed(2)} s`);
 }
 
-function runAll() {
-  MapleKernel.reset();
-  sheet.querySelectorAll('.group.math').forEach(runCell);
+async function runAll() {
+  await Engine.reset();
+  for (const c of sheet.querySelectorAll('.group.math')) await runCell(c);
 }
 
 function setStatus(s) { statusEl.textContent = s; }
@@ -150,7 +230,7 @@ function save() {
 
 function load(data, run = true) {
   sheet.innerHTML = '';
-  MapleKernel.reset();
+  if (!run) Engine.reset();
   data.forEach(c => createCell(c.type, c.content));
   if (!data.length) createCell();
   if (run) runAll();
