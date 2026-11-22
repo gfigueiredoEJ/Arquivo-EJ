@@ -11,22 +11,22 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><span class="logo">∫</span> Ipê Math <small>álgebra computacional</small></div>
-  <nav class="actions">
-    <button id="btn-run-all" title="Executar todas as células (Ctrl+Shift+Enter)">▶ Executar tudo</button>
-    <button id="btn-add-math">+ Matemática</button>
-    <button id="btn-add-text">+ Texto</button>
-    <button id="btn-export" title="Salvar planilha como arquivo .ipe">Salvar</button>
-    <label class="btn" title="Abrir arquivo .ipe">Abrir<input id="file-open" type="file" accept=".ipe,.json" hidden></label>
-    <button id="btn-clear" title="Limpar variáveis e planilha">Nova</button>
-    <button id="btn-theme" title="Alternar tema">◐</button>
-  </nav>
+<header class="toolbar">
+  <span class="appname">Ipê Math</span>
+  <button id="btn-new" type="button" title="Nova folha em branco">Novo</button>
+  <label class="btn" title="Abrir arquivo .ipe">Abrir<input id="file-open" type="file" accept=".ipe,.json" hidden></label>
+  <button id="btn-save" type="button" title="Salvar a folha">Salvar</button>
+  <span class="sep" aria-hidden="true"></span>
+  <button id="btn-prompt" type="button" title="Inserir prompt de execução (Ctrl+J)" class="mono">[&gt;</button>
+  <button id="btn-text" type="button" title="Inserir texto (Ctrl+T)" class="serif">T</button>
+  <button id="btn-run-all" type="button" title="Executar a folha inteira (Ctrl+Shift+Enter)" class="mono">!!!</button>
+  <span class="sep" aria-hidden="true"></span>
+  <button id="btn-help" type="button" title="Lista de comandos">Ajuda</button>
 </header>
-<main class="layout">
-  <aside class="palette" id="palette"></aside>
-  <section class="sheet" id="sheet" aria-label="Planilha"></section>
+<main class="paper">
+  <section class="sheet" id="sheet" aria-label="Folha de trabalho"></section>
 </main>
+<footer class="statusbar"><span id="status">Pronto</span><span class="hint">Enter executa · Shift+Enter nova linha · digite ? para ajuda</span></footer>
 <script src="kernel.js"></script>
 <script src="app.js"></script>
 </body>

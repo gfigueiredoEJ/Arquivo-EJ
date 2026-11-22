@@ -1,15 +1,23 @@
-/* Ipê Math — planilha de álgebra computacional.
- * Motor simbólico: nerdamer (MIT). Renderização: KaTeX. Gráficos: Plotly. */
+/* Ipê Math — folha de trabalho no estilo do Maple.
+ * Interpretador: kernel.js (MapleKernel). Fórmulas: KaTeX. Gráficos: Plotly. */
 'use strict';
 
-// O interpretador com a sintaxe do Maple fica em kernel.js (MapleKernel).
-const kernel = { reset: () => MapleKernel.reset() };
-const evaluateCell = text => MapleKernel.evaluateCell(text);
-
-/* ---------- Interface ---------- */
-
 const sheet = document.getElementById('sheet');
-const STORAGE_KEY = 'ipe-math-worksheet-v2';
+const statusEl = document.getElementById('status');
+const STORAGE_KEY = 'ipe-math-worksheet-v3';
+
+const HELP = `Comandos (sintaxe do Maple). Termine com ; para ver o resultado ou : para ocultar.
+  Definições:  f := x -> x^2 + 1;    a := 3;    g := unapply(x^2, x);    restart;
+  Cálculo:     diff(f(x), x);   int(f(x), x = 0 .. 1);   limit(sin(x)/x, x = 0);   taylor(exp(x), x = 0, 6);   sum(k^2, k = 1 .. n);
+  Equações:    solve(x^2 - 4 = 0, x);   solve({x + y = 3, x - y = 1}, {x, y});   fsolve(cos(x) = x, x);
+  Álgebra:     factor  expand  simplify  normal  subs(x = 2, expr)  eval(expr, x = 2)  convert(expr, parfrac, x)
+  Numérico:    evalf(Pi);   evalf[15](sqrt(2));   Digits := 20;   ifactor(360);   isprime(97);
+  Matrizes:    with(LinearAlgebra):   A := Matrix([[1, 2], [3, 4]]);   Determinant(A);   MatrixInverse(A);   Eigenvalues(A);   A . A;
+  Gráficos:    plot(sin(x), x = -Pi .. Pi);   plot([f(x), g(x)], x = 0 .. 5);   plot3d(x^2 - y^2, x = -2 .. 2, y = -2 .. 2);
+  Histórico:   %  (último resultado)   %%   %%%
+Atalhos: Enter executa · Shift+Enter nova linha · Ctrl+J novo prompt abaixo · Ctrl+K novo prompt acima · Ctrl+T texto · Ctrl+Delete apaga o grupo`;
+
+/* ---------- Saída ---------- */
 
 function renderTex(el, tex) {
   try { katex.render(tex, el, { displayMode: true, throwOnError: false }); }
@@ -21,88 +29,118 @@ function renderOutput(outEl, blocks) {
   for (const b of blocks) {
     const div = document.createElement('div');
     if (b.tex !== undefined) { div.className = 'eq'; renderTex(div, b.tex); }
-    else if (b.approx !== undefined) { div.className = 'approx'; div.textContent = '≈ ' + b.approx; }
     else if (b.note !== undefined) { div.className = 'note'; div.textContent = b.note; }
     else if (b.error !== undefined) { div.className = 'err'; div.textContent = b.error; }
     else if (b.plot) {
       div.className = 'plot';
       outEl.appendChild(div);
-      const dark = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim().startsWith('#1');
-      const ink = dark ? '#ecebef' : '#1d1b19', grid = dark ? '#2f2d36' : '#e3ded8';
       const layout = Object.assign({
-        margin: { l: 50, r: 20, t: 20, b: 40 }, paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: ink }, xaxis: {}, yaxis: {},
+        margin: { l: 50, r: 20, t: b.plot.layout.title ? 40 : 16, b: 40 },
+        paper_bgcolor: '#ffffff', plot_bgcolor: '#ffffff', font: { color: '#000000', family: 'Times New Roman, serif' },
       }, b.plot.layout);
-      layout.xaxis = Object.assign({ gridcolor: grid, zerolinecolor: ink }, layout.xaxis);
-      layout.yaxis = Object.assign({ gridcolor: grid, zerolinecolor: ink }, layout.yaxis);
+      layout.xaxis = Object.assign({ gridcolor: '#eeeeee', zerolinecolor: '#000000' }, layout.xaxis);
+      layout.yaxis = Object.assign({ gridcolor: '#eeeeee', zerolinecolor: '#000000' }, layout.yaxis);
       Plotly.newPlot(div, b.plot.data, layout, { responsive: true, displaylogo: false });
       continue;
     }
     outEl.appendChild(div);
   }
+  outEl.hidden = !blocks.length;
 }
 
-function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+/* ---------- Grupos de execução ---------- */
 
-function createCell(type = 'math', content = '', afterEl = null) {
+function autosize(ta) { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; }
+let cellSeq = 0;
+
+function createCell(type = 'math', content = '', ref = null, where = 'after') {
   const cell = document.createElement('div');
-  cell.className = 'cell ' + type;
+  cell.className = 'group ' + type;
   cell.dataset.type = type;
+  const id = 'in-' + (++cellSeq);
   cell.innerHTML = `
-    <div class="row">
-      <span class="prompt">${type === 'math' ? '&gt;' : '¶'}</span>
-      <textarea class="input" rows="1" spellcheck="false" placeholder="${type === 'math' ? 'Digite uma expressão… (Enter executa, Shift+Enter nova linha)' : 'Texto livre / anotações'}"></textarea>
-      <div class="tools">
-        <button data-act="up" title="Mover para cima">↑</button>
-        <button data-act="down" title="Mover para baixo">↓</button>
-        <button data-act="del" title="Excluir célula">✕</button>
-      </div>
+    <div class="line">
+      ${type === 'math' ? '<span class="prompt" aria-hidden="true">&gt;</span>' : ''}
+      <textarea id="${id}" class="input" rows="1" spellcheck="false" aria-label="${type === 'math' ? 'Entrada' : 'Texto'}"></textarea>
     </div>
-    <div class="output"></div>`;
+    <div class="output" hidden></div>`;
   const ta = cell.querySelector('textarea');
   ta.value = content;
-  if (afterEl) afterEl.after(cell); else sheet.appendChild(cell);
+  if (ref) (where === 'before' ? ref.before(cell) : ref.after(cell)); else sheet.appendChild(cell);
   requestAnimationFrame(() => autosize(ta));
 
   ta.addEventListener('input', () => { autosize(ta); save(); });
-  ta.addEventListener('focus', () => { document.querySelectorAll('.cell.focused').forEach(c => c.classList.remove('focused')); cell.classList.add('focused'); });
-  ta.addEventListener('keydown', ev => {
-    if (ev.key === 'Enter' && ev.ctrlKey && ev.shiftKey) { ev.preventDefault(); runAll(); return; }
-    if (ev.key === 'Enter' && !ev.shiftKey && type === 'math') {
-      ev.preventDefault();
-      runCell(cell);
-      const next = cell.nextElementSibling;
-      if (next) next.querySelector('textarea').focus();
-      else createCell('math', '', cell).querySelector('textarea').focus();
-    }
-    if (ev.key === 'Backspace' && ta.value === '' && sheet.children.length > 1) {
-      ev.preventDefault();
-      const prev = cell.previousElementSibling || cell.nextElementSibling;
-      cell.remove(); save();
-      if (prev) prev.querySelector('textarea').focus();
-    }
+  ta.addEventListener('focus', () => {
+    document.querySelectorAll('.group.focused').forEach(c => c.classList.remove('focused'));
+    cell.classList.add('focused');
   });
-  cell.querySelector('.tools').addEventListener('click', ev => {
-    const act = ev.target.dataset.act;
-    if (act === 'del') { cell.remove(); if (!sheet.children.length) createCell(); }
-    if (act === 'up' && cell.previousElementSibling) cell.previousElementSibling.before(cell);
-    if (act === 'down' && cell.nextElementSibling) cell.nextElementSibling.after(cell);
-    save();
-  });
+  ta.addEventListener('keydown', ev => onKey(ev, cell, ta));
   return cell;
 }
 
+const focusCell = (c, atEnd = true) => {
+  if (!c) return;
+  const ta = c.querySelector('textarea'); ta.focus();
+  const p = atEnd ? ta.value.length : 0; ta.setSelectionRange(p, p);
+};
+
+function onKey(ev, cell, ta) {
+  const k = ev.key;
+  if (k === 'Enter' && ev.ctrlKey && ev.shiftKey) { ev.preventDefault(); runAll(); return; }
+  if ((k === 'j' || k === 'J') && ev.ctrlKey) { ev.preventDefault(); focusCell(createCell('math', '', cell, 'after')); return; }
+  if ((k === 'k' || k === 'K') && ev.ctrlKey) { ev.preventDefault(); focusCell(createCell('math', '', cell, 'before')); return; }
+  if ((k === 't' || k === 'T') && ev.ctrlKey) { ev.preventDefault(); focusCell(createCell('text', '', cell, 'after')); return; }
+  if (k === 'Delete' && ev.ctrlKey) { ev.preventDefault(); deleteCell(cell); return; }
+  if (k === 'Enter' && !ev.shiftKey) {
+    ev.preventDefault();
+    if (cell.dataset.type === 'math') runCell(cell);
+    let next = cell.nextElementSibling;
+    if (!next || next.dataset.type !== 'math') next = createCell('math', '', cell, 'after');
+    focusCell(next);
+    save();
+    return;
+  }
+  if (k === 'Backspace' && ta.value === '' && sheet.children.length > 1) {
+    ev.preventDefault();
+    const prev = cell.previousElementSibling || cell.nextElementSibling;
+    cell.remove(); save(); focusCell(prev);
+    return;
+  }
+  // setas passam de um grupo para outro, como no Maple
+  if (k === 'ArrowUp' && !ta.value.slice(0, ta.selectionStart).includes('\n') && cell.previousElementSibling) {
+    ev.preventDefault(); focusCell(cell.previousElementSibling);
+  }
+  if (k === 'ArrowDown' && !ta.value.slice(ta.selectionEnd).includes('\n') && cell.nextElementSibling) {
+    ev.preventDefault(); focusCell(cell.nextElementSibling, false);
+  }
+}
+
+function deleteCell(cell) {
+  const other = cell.previousElementSibling || cell.nextElementSibling;
+  cell.remove();
+  if (!sheet.children.length) focusCell(createCell());
+  else focusCell(other);
+  save();
+}
+
 function runCell(cell) {
-  const ta = cell.querySelector('textarea');
+  const src = cell.querySelector('textarea').value;
   const out = cell.querySelector('.output');
-  if (cell.dataset.type !== 'math') return;
-  renderOutput(out, evaluateCell(ta.value));
+  if (/^\s*\?/.test(src)) { renderOutput(out, [{ note: HELP }]); return; }
+  setStatus('Calculando…');
+  const t0 = performance.now();
+  renderOutput(out, MapleKernel.evaluateCell(src));
+  setStatus(`Pronto · ${((performance.now() - t0) / 1000).toFixed(2)} s`);
 }
 
 function runAll() {
-  kernel.reset();
-  sheet.querySelectorAll('.cell.math').forEach(runCell);
+  MapleKernel.reset();
+  sheet.querySelectorAll('.group.math').forEach(runCell);
 }
+
+function setStatus(s) { statusEl.textContent = s; }
+
+/* ---------- Arquivo ---------- */
 
 function save() {
   const data = [...sheet.children].map(c => ({ type: c.dataset.type, content: c.querySelector('textarea').value }));
@@ -110,77 +148,15 @@ function save() {
   return data;
 }
 
-function load(data) {
+function load(data, run = true) {
   sheet.innerHTML = '';
-  kernel.reset();
+  MapleKernel.reset();
   data.forEach(c => createCell(c.type, c.content));
   if (!data.length) createCell();
-  runAll();
+  if (run) runAll();
+  focusCell(sheet.lastElementChild);
 }
 
-/* ---------- Paleta ---------- */
-
-const PALETTE = [
-  ['Cálculo', [
-    'diff(sin(x)^2*x, x);', 'diff(x^5, x$3);', 'int(x*exp(x), x);', 'int(x^2, x = 0 .. 3);',
-    'int(exp(-x), x = 0 .. infinity);', 'limit(sin(x)/x, x = 0);', 'taylor(cos(x), x = 0, 8);',
-    'series(exp(x), x = 1, 4);', 'sum(k^2, k = 1 .. 10);', 'product(k, k = 1 .. 5);',
-  ]],
-  ['Equações', [
-    'solve(x^2 - 5*x + 6 = 0, x);', 'solve({x + y = 3, x - y = 1}, {x, y});', 'fsolve(cos(x) = x, x);',
-    'eq := x^2 = 4;', 'lhs(eq);',
-  ]],
-  ['Álgebra', [
-    'factor(x^3 - 1);', 'expand((x + 1)^4);', 'simplify(sin(x)^2 + cos(x)^2);', 'normal((x^2 - 1)/(x - 1));',
-    'convert(1/(x^2 - 1), parfrac, x);', 'subs(x = 2, x^2 + 1);', 'eval(x^2 + y, {x = 1, y = 3});',
-    'coeff(3*x^2 + 2*x + 1, x, 2);', 'numer((x+1)/(x-2));',
-  ]],
-  ['Numérico', [
-    'evalf(Pi);', 'evalf[15](sqrt(2));', 'Digits := 15;', 'ifactor(360);', 'isprime(97);', 'binomial(10, 3);', '100!;',
-  ]],
-  ['Funções', [
-    'f := x -> x^3 - 3*x;', 'f(2);', 'g := unapply(x^2 + 1, x);', 'seq(i^2, i = 1 .. 5);', '%;', 'restart;',
-  ]],
-  ['LinearAlgebra', [
-    'with(LinearAlgebra):', 'A := Matrix([[1, 2], [3, 4]]);', 'Determinant(A);', 'MatrixInverse(A);',
-    'Transpose(A);', 'A . A;', 'Eigenvalues(A);', 'CharacteristicPolynomial(A, lambda);', 'Rank(A);',
-    'LinearSolve(A, Vector([5, 11]));', 'CrossProduct(Vector([1,0,0]), Vector([0,1,0]));',
-  ]],
-  ['inttrans', [
-    'with(inttrans):', 'laplace(t^2, t, s);', 'invlaplace(1/(s^2 + 1), s, t);',
-  ]],
-  ['Gráficos', [
-    'plot(sin(x), x = -Pi .. Pi);', 'plot([sin(x), cos(x)], x = 0 .. 2*Pi, color = [red, blue], title = "Trig");',
-    'plot(x^3 - 3*x, x = -3 .. 3, y = -5 .. 5);', 'plot3d(sin(x)*cos(y), x = -3 .. 3, y = -3 .. 3);',
-  ]],
-];
-
-function buildPalette() {
-  const pal = document.getElementById('palette');
-  for (const [title, items] of PALETTE) {
-    const h = document.createElement('h3'); h.textContent = title; pal.appendChild(h);
-    for (const it of items) {
-      const b = document.createElement('button'); b.textContent = it;
-      b.title = 'Inserir na célula atual';
-      b.addEventListener('click', () => {
-        let cell = document.querySelector('.cell.focused.math');
-        if (!cell || cell.querySelector('textarea').value.trim()) {
-          cell = createCell('math', '', cell || sheet.lastElementChild);
-        }
-        const ta = cell.querySelector('textarea');
-        ta.value = it; autosize(ta); ta.focus(); runCell(cell); save();
-      });
-      pal.appendChild(b);
-    }
-  }
-}
-
-/* ---------- Barra superior ---------- */
-
-document.getElementById('btn-run-all').onclick = runAll;
-document.getElementById('btn-add-math').onclick = () => createCell('math', '', document.querySelector('.cell.focused')).querySelector('textarea').focus();
-document.getElementById('btn-add-text').onclick = () => createCell('text', '', document.querySelector('.cell.focused')).querySelector('textarea').focus();
-// Aviso discreto (alert/confirm não funcionam quando a página está embutida)
 function toast(msg) {
   let t = document.getElementById('toast');
   if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; document.body.appendChild(t); }
@@ -189,59 +165,51 @@ function toast(msg) {
 }
 const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
 
-// "Nova" pede um segundo clique para confirmar
-const btnClear = document.getElementById('btn-clear');
-btnClear.onclick = () => {
-  if (btnClear.dataset.armed) {
-    delete btnClear.dataset.armed; btnClear.textContent = 'Nova';
-    load([{ type: 'math', content: '' }]); toast('Planilha nova criada.');
+/* ---------- Barra de ferramentas ---------- */
+
+const current = () => document.querySelector('.group.focused') || sheet.lastElementChild;
+document.getElementById('btn-run-all').onclick = runAll;
+document.getElementById('btn-prompt').onclick = () => focusCell(createCell('math', '', current(), 'after'));
+document.getElementById('btn-text').onclick = () => focusCell(createCell('text', '', current(), 'after'));
+document.getElementById('btn-help').onclick = () => {
+  const c = createCell('math', '?', current(), 'after'); runCell(c); focusCell(createCell('math', '', c, 'after'));
+};
+
+const btnNew = document.getElementById('btn-new');
+btnNew.onclick = () => {
+  if (btnNew.dataset.armed || [...sheet.querySelectorAll('textarea')].every(t => !t.value.trim())) {
+    delete btnNew.dataset.armed; btnNew.textContent = 'Novo';
+    load([], false); setStatus('Pronto');
     return;
   }
-  btnClear.dataset.armed = '1'; btnClear.textContent = 'Confirmar?';
-  setTimeout(() => { delete btnClear.dataset.armed; btnClear.textContent = 'Nova'; }, 3000);
+  btnNew.dataset.armed = '1'; btnNew.textContent = 'Apagar tudo?';
+  setTimeout(() => { delete btnNew.dataset.armed; btnNew.textContent = 'Novo'; }, 3000);
 };
-document.getElementById('btn-export').onclick = async () => {
+
+document.getElementById('btn-save').onclick = async () => {
   const json = JSON.stringify({ app: 'ipe-math', version: 1, cells: save() }, null, 2);
   if (EMBEDDED) {
-    // downloads ficam bloqueados quando embutido: copia o conteúdo
-    try { await navigator.clipboard.writeText(json); toast('Planilha copiada. Cole num arquivo .ipe para guardar.'); }
-    catch (e) { toast('Não foi possível copiar. A planilha continua salva neste navegador.'); }
+    try { await navigator.clipboard.writeText(json); toast('Folha copiada. Cole num arquivo .ipe para guardar.'); }
+    catch (e) { toast('Não foi possível copiar. A folha continua salva neste navegador.'); }
     return;
   }
   const blob = new Blob([json], { type: 'application/json' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'planilha.ipe'; a.click();
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'folha.ipe'; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 document.getElementById('file-open').onchange = async ev => {
   const f = ev.target.files[0]; if (!f) return;
-  try { const j = JSON.parse(await f.text()); load(j.cells || j); toast('Planilha aberta.'); }
+  try { const j = JSON.parse(await f.text()); load(j.cells || j); toast('Folha aberta.'); }
   catch (e) { toast('Arquivo inválido: ' + e.message); }
   ev.target.value = '';
 };
-document.getElementById('btn-theme').onclick = () => {
-  const root = document.documentElement;
-  const isDark = getComputedStyle(root).getPropertyValue('--bg').trim().startsWith('#1');
-  root.dataset.theme = isDark ? 'light' : 'dark';
-  try { localStorage.setItem('ipe-theme', root.dataset.theme); } catch (e) {}
-  runAll();
-};
 
-/* ---------- Inicialização ---------- */
+/* ---------- Início: folha em branco (ou a última folha que você usou) ---------- */
 
 (function init() {
-  try { const t = localStorage.getItem('ipe-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
-  buildPalette();
-  let data = null;
-  try { data = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch (e) {}
-  if (!data || !data.length || data.some(c => /derivar|integrar|resolver\(/.test(c.content))) data = [
-    { type: 'text', content: 'Bem-vindo ao Ipê Math! A entrada segue a sintaxe do Maple: termine com ; para ver o resultado ou : para ocultá-lo. Enter executa.' },
-    { type: 'math', content: 'f := x -> x^3 - 3*x;' },
-    { type: 'math', content: 'diff(f(x), x);' },
-    { type: 'math', content: 'solve(% = 0, x);' },
-    { type: 'math', content: 'int(f(x), x = 0 .. 2);' },
-    { type: 'math', content: 'plot([f(x), diff(f(x), x)], x = -2.5 .. 2.5);' },
-  ];
+  let data = [];
+  try { data = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch (e) {}
+  if (!data.some(c => c.content && c.content.trim())) data = [];
   load(data);
+  setStatus('Pronto');
 })();
-
-// Exporta para testes em Node
