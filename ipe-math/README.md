@@ -17,7 +17,8 @@ Abra `index.html` no navegador (precisa de internet na primeira carga para baixa
 
 | Área | Comandos |
 |---|---|
-| Cálculo | `diff(f, x)`, `diff(f, x$3)`, `diff(f, x, y)`, `int(f, x)`, `int(f, x = a .. b)`, `limit(f, x = a)`, `sum(f, k = a .. b)`, `product`, `add`, `mul`, `seq`, `taylor(f, x = a, n)`, `series` |
+| Derivadas | `diff(f(x), x)`, `diff(f(x), x$2)`, `D(f)`, `D(f)(2)`, `D[1](h)`, `(D@@2)(f)`, `f'(x)`, `Diff(f(x), x)` (forma não avaliada), `implicitdiff(eq, y, x)` |
+| Cálculo | `int(f, x)`, `int(f, x = a .. b)`, `limit(f, x = a)`, `sum(f, k = a .. b)`, `product`, `add`, `mul`, `seq`, `taylor(f, x = a, n)`, `series`, formas não avaliadas `Int`, `Sum`, `Limit`, `Product` e `value(%)` |
 | Equações | `solve(eq, x)`, `solve({eq1, eq2}, {x, y})`, `fsolve(eq, x)`, `fsolve(eq, x = a .. b)`, `lhs`, `rhs` |
 | Álgebra | `factor`, `expand`, `simplify`, `normal`, `convert(f, parfrac, x)`, `subs(x = a, f)`, `eval(f, x = a)`, `numer`, `denom`, `coeff`, `degree`, `collect` |
 | Numérico | `evalf(e)`, `evalf(e, n)`, `evalf[n](e)`, `Digits := n`, `ifactor`, `isprime`, `ithprime`, `igcd`, `ilcm`, `irem`, `iquo`, `binomial`, `n!` |

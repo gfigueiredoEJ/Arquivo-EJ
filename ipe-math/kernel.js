@@ -146,8 +146,15 @@
 
   // Traduz uma expressão Maple para uma string que o nerdamer entende,
   // avaliando os comandos Maple aninhados (diff, int, solve, …).
+  // f'(x) -> D(f)(x);  (D@@2)(f) -> D(D(f))
+  function preD(src) {
+    return String(src)
+      .replace(/\(\s*D\s*@@\s*(\d+)\s*\)\s*\(\s*([A-Za-z_]\w*)\s*\)/g, (m, n, f) => 'D('.repeat(+n) + f + ')'.repeat(+n))
+      .replace(/(^|[^\w'])([A-Za-z_]\w*)('+)\s*\(/g, (m, pre, f, q) => pre + 'D('.repeat(q.length) + f + ')'.repeat(q.length) + '(');
+  }
+
   function tr(src) {
-    src = String(src).trim().replace(/(\d+)!/g, 'factorial($1)').replace(/\b(LinearAlgebra|inttrans|plots|student|Student)\s*:-\s*/g, '');
+    src = preD(String(src).trim()).replace(/(\d+)!/g, 'factorial($1)').replace(/\b(LinearAlgebra|inttrans|plots|student|Student)\s*:-\s*/g, '');
     let out = '', i = 0;
     while (i < src.length) {
       const ch = src[i];
@@ -164,7 +171,10 @@
           const k = matchClose(src, j);
           if (k < 0) throw err(null, '`)` unexpected / missing');
           const args = splitTop(src.slice(j + 1, k));
-          out += '(' + callValue(name, args, sub) + ')';
+          const r = callResult(name, args, sub);
+          // D(f)(2): o resultado é uma função, aplica direto
+          if (r.fname && src[k + 1] === '(') out += r.fname;
+          else out += '(' + r.value + ')';
           i = k + 1;
           continue;
         }
@@ -218,14 +228,66 @@
   }
 
   // Valor de uma chamada aninhada (string nerdamer)
-  function callValue(name, args, sub) {
+  function callResult(name, args, sub) {
     if (Object.prototype.hasOwnProperty.call(CMD, name)) {
       const r = CMD[name](args, sub);
       if (r && r.plot) throw err(name, 'a plot cannot be used inside an expression');
-      return r && typeof r === 'object' ? r.value : r;
+      return r && typeof r === 'object' ? r : { value: r };
     }
     const fn = RENAME[name] || name;
-    return `${fn}(${args.map(tr).join(',')})`;
+    return { value: `${fn}(${args.map(tr).join(',')})` };
+  }
+  const callValue = (name, args, sub) => callResult(name, args, sub).value;
+
+  /* ---------- funções como objetos (operador D) ---------- */
+  const PARSER_FNS = (() => { try { return nd.getCore().PARSER.functions; } catch (e) { return {}; } })();
+  function isKnownFn(name) {
+    return Object.prototype.hasOwnProperty.call(CMD, name) || Object.prototype.hasOwnProperty.call(RENAME, name) ||
+      state.funcs.has(name) || Object.prototype.hasOwnProperty.call(PARSER_FNS, name);
+  }
+  // devolve {params, body} de uma função do usuário, de uma seta x -> ... ou de uma função embutida (sin, exp…)
+  function fnInfo(arg) {
+    const a = arg.trim();
+    const arrow = arrowFn(a);
+    if (arrow) return { params: arrow.params, body: nd(tr(arrow.body)).toString() };
+    if (state.funcs.has(a)) return state.funcs.get(a);
+    const inner = /^D(\[[^\]]*\])?\s*\(/.test(a) ? callResult('D', splitTop(a.slice(a.indexOf('(') + 1, -1)), (a.match(/^D\[([^\]]*)\]/) || [])[1] || null) : null;
+    if (inner && inner.fn) return inner.fn;
+    const nm = RENAME[a] || a;
+    if (/^[A-Za-z_]\w*$/.test(a) && (Object.prototype.hasOwnProperty.call(PARSER_FNS, nm) || nm === 'exp')) {
+      return { params: ['x'], body: nm === 'exp' ? 'e^x' : `${nm}(x)` };
+    }
+    throw err('D', `${a} is not a function; define it first, e.g. ${a} := x -> x^2`);
+  }
+  let anonSeq = 0;
+  function fnResult(params, body) {
+    body = nd(body).toString();
+    const fname = 'Dfn' + (++anonSeq);
+    nd.setFunction(fname, params, body);
+    state.funcs.set(fname, { params, body });
+    const p = params.length === 1 ? params[0] : `\\left(${params.join(', ')}\\right)`;
+    return { value: fname, fname, fn: { params, body }, tex: `${p} \\mapsto ${tex(body)}`, noHistory: false };
+  }
+  function derivTeX(fTex, vars) {
+    const n = vars.length;
+    if (new Set(vars).size === 1) {
+      const v = vars[0];
+      return n === 1 ? `\\frac{d}{d${v}}\\left(${fTex}\\right)` : `\\frac{d^{${n}}}{d${v}^{${n}}}\\left(${fTex}\\right)`;
+    }
+    return `\\frac{\\partial^{${n}}}{${vars.map(v => `\\partial ${v}`).join('\\,')}}\\left(${fTex}\\right)`;
+  }
+  function unknownCall(src) { // primeira chamada a função não definida, ex.: y(x)
+    const re = /(^|[^\w])([A-Za-z_]\w*)\s*\(/g; let m;
+    while ((m = re.exec(src))) if (!isKnownFn(m[2]) && !CONST[m[2]]) return m[2];
+    return null;
+  }
+  function diffVars(args) {
+    const out = [];
+    for (const a of args) {
+      const m = /^\s*([A-Za-z_]\w*)\s*\$\s*(\d+)\s*$/.exec(a);
+      out.push(...(m ? Array(+m[2]).fill(m[1]) : listOrSet(a).map(x => x.trim())));
+    }
+    return out;
   }
 
   /* ======================= Resultados ======================= */
@@ -251,13 +313,41 @@
     /* ---------- Cálculo ---------- */
     diff(args) {
       if (args.length < 2) throw err('diff', 'expecting at least 2 arguments');
-      let e = tr(args[0]);
-      for (const a of args.slice(1)) {
-        const m = /^\s*([A-Za-z_]\w*)\s*\$\s*(\d+)\s*$/.exec(a);
-        const vars = m ? Array(+m[2]).fill(m[1]) : listOrSet(a);
-        for (const v of vars) e = nd(`diff(${e},${v})`).toString();
+      const vars = diffVars(args.slice(1));
+      for (const v of vars) {
+        if (state.vars.has(v)) throw err('diff', `invalid input: diff received ${nd(v).toString()}, which is not valid for its 2nd argument (use ${v} := '${v}' to unassign ${v})`);
       }
+      const unk = unknownCall(preD(args[0]));
+      if (unk) { // função desconhecida, ex.: diff(y(x), x) fica indicada, como no Maple
+        const t = derivTeX(args[0].replace(/\*/g, '\\,'), vars);
+        return { value: `d${vars.length}_${unk}`, tex: t };
+      }
+      let e = tr(args[0]);
+      for (const v of vars) e = nd(`diff(${e},${v})`).toString();
       return R(e);
+    },
+    Diff(args) { // forma inerte: mostra d/dx sem calcular (value(%) calcula)
+      const vars = diffVars(args.slice(1));
+      const r = CMD.diff(args);
+      return { value: r.value, tex: derivTeX(tex(tr(args[0])), vars) };
+    },
+    D(args, sub) {
+      if (args.length !== 1) throw err('D', 'expecting exactly 1 argument, e.g. D(f)');
+      const { params, body } = fnInfo(args[0]);
+      const idx = sub ? splitTop(sub).map(i => Math.round(N(tr(i)))) : [1];
+      let b = body;
+      for (const i of idx) {
+        const v = params[i - 1];
+        if (!v) throw err('D', `index ${i} out of range: the function has ${params.length} parameter(s)`);
+        b = nd(`diff(${b},${v})`).toString();
+      }
+      return fnResult(params, b);
+    },
+    implicitdiff(args) {
+      const F = eqToExpr(args[0]);
+      const y = args[1].trim(), x = args[2].trim();
+      const Fx = nd(`diff(${F},${x})`).toString(), Fy = nd(`diff(${F},${y})`).toString();
+      return R(nd(`simplify(-(${Fx})/(${Fy}))`).toString());
     },
     int(args) {
       const f = tr(args[0]);
@@ -320,7 +410,9 @@
         if (braced || isWrapped(args[0], '{', '}')) {
           return seqR(sols.map(s => ({ value: `${v}=${s}`, tex: `\\left\\{${v} = ${tex(s)}\\right\\}` })));
         }
-        return seqR(sols);
+        const seen = new Set();
+        const uniq = sols.map(prettySol).filter(x => { const k = typeof x === 'string' ? nd(x).toString() : x.tex; if (seen.has(k)) return false; seen.add(k); return true; });
+        return seqR(uniq);
       }
       const sol = nd.solveEquations(exprs.map(x => `${x}=0`), vars);
       if (!sol || !sol.length) return { value: '[]', tex: '\\text{(no solutions found)}' };
@@ -598,8 +690,15 @@
   };
   // sinônimos do próprio Maple
   Object.assign(CMD, {
-    Int: (a) => { const r = CMD.int(a); return r; }, add: CMD.sum, mul: CMD.product, Sum: CMD.sum, Product: CMD.product,
-    Limit: CMD.limit, Diff: CMD.diff, inverse: CMD.MatrixInverse,
+    add: CMD.sum, mul: CMD.product, inverse: CMD.MatrixInverse,
+    Int(a) {
+      const r = CMD.int(a); const f = tex(tr(a[0]));
+      if (a[1] && a[1].includes('..')) { const g = parseRange(a[1], 'Int'); return { value: r.value, tex: `\\int_{${tex(g.a)}}^{${tex(g.b)}} ${f}\\,d${g.v}` }; }
+      return { value: r.value, tex: `\\int ${f}\\,d${(a[1] || 'x').trim()}` };
+    },
+    Sum(a) { const r = CMD.sum(a), g = parseRange(a[1], 'Sum'); return { value: r.value, tex: `\\sum_{${g.v}=${tex(g.a)}}^{${tex(g.b)}} ${tex(tr(a[0]))}` }; },
+    Product(a) { const r = CMD.product(a), g = parseRange(a[1], 'Product'); return { value: r.value, tex: `\\prod_{${g.v}=${tex(g.a)}}^{${tex(g.b)}} ${tex(tr(a[0]))}` }; },
+    Limit(a) { const r = CMD.limit(a), e = parseEq(a[1]); return { value: r.value, tex: `\\lim_{${e.lhs.trim()} \\to ${tex(tr(e.rhs))}} ${tex(tr(a[0]))}` }; },
   });
 
   function series(args, name) {
@@ -629,6 +728,13 @@
     return { value: poly, tex: `${texParts.join('') || '0'} + O\\left(${base}^{${n}}\\right)` };
   }
 
+  // raízes numéricas aproximadas viram decimais (o motor devolve frações enormes)
+  function prettySol(sv) {
+    try {
+      if (/\d{7,}/.test(sv) && !nd(sv).variables().length) return { value: sv, tex: fmtFloat(N(sv), state.digits) };
+    } catch (e) {}
+    return sv;
+  }
   function eqParts(arg) { // equação literal, guardada em variável ou vinda do histórico
     let s = tr(arg).trim();
     while (isWrapped(s, '(', ')')) s = unwrap(s);
@@ -743,7 +849,8 @@
       if (un) { const a = splitTop(un[1]); return defineFn(name, a.slice(1).map(s => s.trim()), tr(a[0])); }
       // x := 'x'  (desatribuir)
       if (rhs.trim() === `'${name}'`) { CMD.unassign([name]); return { value: name, tex: `${name} := ${name}` }; }
-      const r = evalExpr(rhs);
+      const r = evalExpr(preD(rhs));
+      if (r.fn) return defineFn(name, r.fn.params, r.fn.body);
       if (r.plot) return r;
       if (r.none) return r;
       if (/=/.test(r.value)) { state.eqs.set(name, r.value); try { nd.setVar(name, 'delete'); } catch (e) {} }
@@ -753,12 +860,12 @@
     const s = substHistory(src);
     const fnDef = arrowFn(s);
     if (fnDef) return { value: '0', tex: `${fnDef.params.length === 1 ? fnDef.params[0] : `\\left(${fnDef.params.join(', ')}\\right)`} \\mapsto ${tex(tr(fnDef.body))}`, noHistory: true };
-    return evalExpr(s);
+    return evalExpr(preD(s));
   }
 
   function defineFn(name, params, body) {
     nd.setFunction(name, params, nd(body).toString());
-    state.funcs.set(name, params);
+    state.funcs.set(name, { params, body: nd(body).toString() });
     const p = params.length === 1 ? params[0] : `\\left(${params.join(', ')}\\right)`;
     return { value: name, tex: `${name} := ${p} \\mapsto ${tex(body)}`, noHistory: true };
   }
@@ -786,8 +893,8 @@
     // equação simples
     const e = parseEq(src);
     if (e && !/[<>]/.test(src)) {
-      const l = nd(tr(e.lhs)).toString(), r = nd(tr(e.rhs)).toString();
-      return { value: `${l}=${r}`, tex: eqTeX(l, r) };
+      const L = sideR(e.lhs), Rr = sideR(e.rhs);
+      return { value: `${L.value}=${Rr.value}`, tex: `${L.tex} = ${Rr.tex}` };
     }
     const hasFloat = /(^|[^\w.])\d*\.\d+|\d+\.(?!\.)/.test(src);
     const v = nd(tr(src)).toString();
@@ -798,6 +905,17 @@
     }
     if (v === 'true' || v === 'false') return { value: v, tex: `\\mathit{${v}}` };
     return R(v);
+  }
+
+  function sideR(s) { // um lado de equação: comandos inertes (Diff, Int…) mantêm a forma
+    s = s.trim();
+    const cm = /^([A-Za-z_]\w*)\s*(\[[^\]]*\])?\s*\(/.exec(s);
+    if (cm && CMD[cm[1]] && matchClose(s, s.indexOf('(', cm[0].length - 1)) === s.length - 1) {
+      const r = CMD[cm[1]](splitTop(s.slice(s.indexOf('(', cm[0].length - 1) + 1, -1)), cm[2] ? cm[2].slice(1, -1) : null);
+      if (r.tex !== undefined) return r;
+    }
+    const v = nd(tr(s)).toString();
+    return { value: v, tex: tex(v) };
   }
 
   function friendlyError(e, src) {
