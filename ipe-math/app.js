@@ -180,16 +180,42 @@ function buildPalette() {
 document.getElementById('btn-run-all').onclick = runAll;
 document.getElementById('btn-add-math').onclick = () => createCell('math', '', document.querySelector('.cell.focused')).querySelector('textarea').focus();
 document.getElementById('btn-add-text').onclick = () => createCell('text', '', document.querySelector('.cell.focused')).querySelector('textarea').focus();
-document.getElementById('btn-clear').onclick = () => { if (confirm('Começar uma nova planilha? O conteúdo atual será apagado.')) load([{ type: 'math', content: '' }]); };
-document.getElementById('btn-export').onclick = () => {
-  const blob = new Blob([JSON.stringify({ app: 'ipe-math', version: 1, cells: save() }, null, 2)], { type: 'application/json' });
+// Aviso discreto (alert/confirm não funcionam quando a página está embutida)
+function toast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; document.body.appendChild(t); }
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, 3500);
+}
+const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
+
+// "Nova" pede um segundo clique para confirmar
+const btnClear = document.getElementById('btn-clear');
+btnClear.onclick = () => {
+  if (btnClear.dataset.armed) {
+    delete btnClear.dataset.armed; btnClear.textContent = 'Nova';
+    load([{ type: 'math', content: '' }]); toast('Planilha nova criada.');
+    return;
+  }
+  btnClear.dataset.armed = '1'; btnClear.textContent = 'Confirmar?';
+  setTimeout(() => { delete btnClear.dataset.armed; btnClear.textContent = 'Nova'; }, 3000);
+};
+document.getElementById('btn-export').onclick = async () => {
+  const json = JSON.stringify({ app: 'ipe-math', version: 1, cells: save() }, null, 2);
+  if (EMBEDDED) {
+    // downloads ficam bloqueados quando embutido: copia o conteúdo
+    try { await navigator.clipboard.writeText(json); toast('Planilha copiada. Cole num arquivo .ipe para guardar.'); }
+    catch (e) { toast('Não foi possível copiar. A planilha continua salva neste navegador.'); }
+    return;
+  }
+  const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'planilha.ipe'; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 document.getElementById('file-open').onchange = async ev => {
   const f = ev.target.files[0]; if (!f) return;
-  try { const j = JSON.parse(await f.text()); load(j.cells || j); }
-  catch (e) { alert('Arquivo inválido: ' + e.message); }
+  try { const j = JSON.parse(await f.text()); load(j.cells || j); toast('Planilha aberta.'); }
+  catch (e) { toast('Arquivo inválido: ' + e.message); }
   ev.target.value = '';
 };
 document.getElementById('btn-theme').onclick = () => {
