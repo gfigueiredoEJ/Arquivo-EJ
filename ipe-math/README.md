@@ -1,40 +1,42 @@
 # Ipê Math
 
-Planilha de álgebra computacional que roda no navegador: cálculo simbólico, resolução de equações, matrizes e gráficos 2D/3D, com comandos em português.
+Planilha de álgebra computacional que roda no navegador, com **a mesma sintaxe de entrada do Maple** (Maple Input 1-D): cálculo simbólico, equações, álgebra linear, transformadas e gráficos 2D/3D.
 
 ## Como usar
 
-Abra `index.html` no navegador (precisa de internet na primeira carga para baixar as bibliotecas). Digite uma expressão numa célula e pressione **Enter**.
+Abra `index.html` no navegador (precisa de internet na primeira carga para baixar as bibliotecas). Digite comandos e pressione **Enter**.
 
-- **Shift+Enter**: nova linha na mesma célula
-- **Ctrl+Shift+Enter**: executar todas as células
-- `%`: último resultado
-- `a := expr`: define variável; `f(x) := expr`: define função
-- Várias instruções numa célula: separe com `;` ou quebra de linha
-- **Salvar/Abrir**: exporta/importa a planilha como arquivo `.ipe` (o navegador também guarda automaticamente a última planilha)
+- `;` no fim mostra o resultado; `:` executa sem mostrar
+- `%`, `%%`, `%%%`: último, penúltimo e antepenúltimo resultado
+- `a := expr` atribui; `x := 'x'` ou `unassign('x')` desatribui; `restart;` limpa tudo
+- `f := x -> x^2` ou `f := unapply(expr, x)` define funções
+- `#` inicia comentário; **Shift+Enter** quebra linha; **Ctrl+Shift+Enter** executa tudo
+- **Salvar/Abrir**: arquivo `.ipe` (a última planilha também fica salva no navegador)
 
-## Comandos
+## Comandos suportados
 
-| Comando | Exemplo |
+| Área | Comandos |
 |---|---|
-| Derivada | `derivar(sin(x)^2, x)`, `derivar(x^5, x, 3)` |
-| Integral | `integrar(x*e^x, x)`, `integrar(x^2, x, 0, 3)` |
-| Limite | `limite(sin(x)/x, x, 0)` |
-| Série de Taylor | `taylor(cos(x), x, 0, 6)` |
-| Somatório / produtório | `somatorio(k^2, k, 1, 10)`, `produtorio(k, k, 1, 5)` |
-| Equações | `resolver(x^2-5x+6=0, x)` |
-| Sistemas | `resolver([x+y=3, x-y=1], [x, y])` |
-| Álgebra | `fatorar`, `expandir`, `simplificar`, `parcial` (frações parciais), `mdc`, `mmc` |
-| Numérico | `avaliar(pi, 20)` |
-| Matrizes | `A := matriz([1,2],[3,4])`, `det(A)`, `inversa(A)`, `transposta(A)`, `A*A` |
-| Transformadas | `laplace(t^2, t, s)`, `ilaplace(1/(s^2+1), s, t)` |
-| Gráficos | `plot([sin(x), cos(x)], x, -2pi, 2pi)`, `plot3d(sin(x)*cos(y), x, y, -3, 3, -3, 3)` |
-| Sessão | `variaveis()`, `limpar()`, `ajuda()` |
+| Cálculo | `diff(f, x)`, `diff(f, x$3)`, `diff(f, x, y)`, `int(f, x)`, `int(f, x = a .. b)`, `limit(f, x = a)`, `sum(f, k = a .. b)`, `product`, `add`, `mul`, `seq`, `taylor(f, x = a, n)`, `series` |
+| Equações | `solve(eq, x)`, `solve({eq1, eq2}, {x, y})`, `fsolve(eq, x)`, `fsolve(eq, x = a .. b)`, `lhs`, `rhs` |
+| Álgebra | `factor`, `expand`, `simplify`, `normal`, `convert(f, parfrac, x)`, `subs(x = a, f)`, `eval(f, x = a)`, `numer`, `denom`, `coeff`, `degree`, `collect` |
+| Numérico | `evalf(e)`, `evalf(e, n)`, `evalf[n](e)`, `Digits := n`, `ifactor`, `isprime`, `ithprime`, `igcd`, `ilcm`, `irem`, `iquo`, `binomial`, `n!` |
+| Constantes e funções | `Pi`, `I`, `infinity`, `exp`, `ln`, `log[b]`, `sqrt`, `abs`, `sin`…`arctan`, `sinh`… |
+| `with(LinearAlgebra)` | `Matrix([[..],[..]])`, `Matrix(n, m, [...])`, `Matrix(n, n, shape = identity)`, `Vector([..])`, `A . B`, `A^(-1)`, `A[i, j]`, `Determinant`, `MatrixInverse`, `Transpose`, `Trace`, `Rank`, `Eigenvalues`, `CharacteristicPolynomial`, `LinearSolve`, `DotProduct`, `CrossProduct`, `RowDimension`, `ColumnDimension` (também `LinearAlgebra:-Determinant(A)`) |
+| `with(inttrans)` | `laplace(f, t, s)`, `invlaplace(F, s, t)` |
+| Gráficos | `plot(f, x = a .. b)`, `plot([f, g], x = a .. b, y = c .. d, color = [red, blue], title = "…", labels = ["x", "y"], legend = [..], style = point)`, `plot3d(f, x = a .. b, y = c .. d)` |
+| Listas e conjuntos | `[1, 2, 3]`, `{1, 2}`, `L[i]` (índice a partir de 1), `nops(L)` |
 
-Nomes em inglês (`diff`, `integrate`, `solve`, `factor`…) e funções como `sen`, `tg`, `ln` também funcionam.
+## Limitações conhecidas
+
+- O motor simbólico é o nerdamer, que é bem menos poderoso que o do Maple: algumas integrais, somas infinitas e simplificações ficam sem avaliar.
+- `dsolve` (equações diferenciais), `assume`, `proc ... end proc`, laços `for`/`while` e os pacotes `plots`/`Student` ainda não são suportados.
+- `evalf` tem precisão máxima de ~16 dígitos (ponto flutuante do JavaScript).
+- `e` é tratado como a constante de Euler (no Maple é só um nome; lá a constante é `exp(1)`, que também funciona aqui).
 
 ## Arquitetura
 
-- `app.js` — kernel (parsing, aliases, comandos especiais) e interface de planilha
+- `kernel.js` — interpretador da sintaxe Maple: separa instruções, traduz comandos para o motor simbólico, mantém variáveis, funções e histórico (`%`)
+- `app.js` — interface de planilha (células, paleta, salvar/abrir, tema)
 - `style.css` — tema claro/escuro
-- Bibliotecas de código aberto: [nerdamer](https://github.com/jiggzson/nerdamer) (motor simbólico, MIT), [KaTeX](https://katex.org) (renderização, MIT), [Plotly.js](https://plotly.com/javascript/) (gráficos, MIT)
+- Bibliotecas de código aberto: [nerdamer](https://github.com/jiggzson/nerdamer) (motor simbólico, MIT), [KaTeX](https://katex.org) (fórmulas, MIT), [Plotly.js](https://plotly.com/javascript/) (gráficos, MIT)
