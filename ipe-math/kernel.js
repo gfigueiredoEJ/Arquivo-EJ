@@ -307,7 +307,7 @@ function MapleKernelFactory(global) {
   ['Gradient', 'Hessian', 'Jacobian', 'DirectionalDerivative', 'TangentPlane', 'SecondDerivativeTest', 'LagrangeMultipliers', 'MultiInt', 'TaylorApproximation', 'CriticalPoints'].forEach(c => addPkg(c, 'Student_MultivariateCalculus'));
   ['grad', 'hessian', 'jacobian', 'laplacian', 'diverge', 'curl', 'det', 'inverse', 'transpose'].forEach(c => addPkg(c, 'linalg'));
   ['animate', 'contourplot', 'densityplot', 'display', 'fieldplot', 'gradplot', 'implicitplot', 'implicitplot3d', 'inequal', 'logplot', 'loglogplot',
-    'odeplot', 'pointplot', 'pointplot3d', 'polarplot', 'semilogplot', 'spacecurve', 'textplot'].forEach(c => addPkg(c, 'plots'));
+    'odeplot', 'pointplot', 'pointplot3d', 'polarplot', 'semilogplot', 'spacecurve', 'textplot', 'intersectplot'].forEach(c => addPkg(c, 'plots'));
   const PKGS = 'LinearAlgebra|inttrans|plots|VectorCalculus|linalg|Student|student';
   const pkgPrefix = src => String(src)
     .replace(/\bStudent\s*\[\s*MultivariateCalculus\s*\]\s*\[\s*([A-Za-z_]\w*)\s*\]/g, 'PKGOK__$1')
@@ -982,7 +982,7 @@ function MapleKernelFactory(global) {
         VectorCalculus: ['Curl', 'DirectionalDiff', 'Divergence', 'Gradient', 'Hessian', 'Jacobian', 'Laplacian', 'SetCoordinates', 'VectorField'],
         Student_MultivariateCalculus: ['CriticalPoints', 'DirectionalDerivative', 'Gradient', 'Hessian', 'Jacobian', 'LagrangeMultipliers', 'MultiInt', 'SecondDerivativeTest', 'TangentPlane', 'TaylorApproximation'],
         linalg: ['curl', 'det', 'diverge', 'grad', 'hessian', 'inverse', 'jacobian', 'laplacian', 'transpose'],
-        plots: ['animate', 'contourplot', 'densityplot', 'display', 'fieldplot', 'gradplot', 'implicitplot', 'implicitplot3d', 'inequal', 'logplot', 'loglogplot', 'odeplot', 'pointplot', 'pointplot3d', 'polarplot', 'semilogplot', 'spacecurve', 'textplot'],
+        plots: ['animate', 'contourplot', 'densityplot', 'display', 'fieldplot', 'gradplot', 'implicitplot', 'implicitplot3d', 'inequal', 'intersectplot', 'logplot', 'loglogplot', 'odeplot', 'pointplot', 'pointplot3d', 'polarplot', 'semilogplot', 'spacecurve', 'textplot'],
         student: [], Student: [],
       };
       if (!EXPORTS[pkg]) throw err('with', `invalid input: ${pkg} is not a supported package`);
@@ -1364,13 +1364,99 @@ function MapleKernelFactory(global) {
       const opts = parseOpts(args.slice(1));
       const [rx, ry, rz] = opts.ranges;
       if (!rx || !ry || !rz) throw err('implicitplot3d', 'expecting ranges for x, y and z');
-      const F = numFn(eqToExpr(args[0]), [rx.v, ry.v, rz.v], 'implicitplot3d');
-      const G = 28, X = [], Y = [], Z = [], V = [];
+      // aceita uma superfície ou uma lista/conjunto delas: implicitplot3d([y = -13, y = 13], ...)
+      const eqs = isWrapped(args[0], '[', ']') || isWrapped(args[0], '{', '}') ? listOrSet(args[0]) : [args[0]];
+      const G = 30;
       const [a0, a1] = rangeOf(rx), [b0, b1] = rangeOf(ry), [c0, c1] = rangeOf(rz);
-      for (const x of linspace(a0, a1, G)) for (const y of linspace(b0, b1, G)) for (const z of linspace(c0, c1, G)) { X.push(x); Y.push(y); Z.push(z); V.push(F(x, y, z)); }
-      const c = listOpt(opts.named.color)[0];
-      return plotResult([{ type: 'isosurface', x: X, y: Y, z: Z, value: V, isomin: 0, isomax: 0, surface: { count: 1 }, caps: { x: { show: false }, y: { show: false }, z: { show: false } },
-        showscale: false, colorscale: c ? [[0, colorName(c)], [1, colorName(c)]] : 'Viridis' }], base3D(opts, [rx.v, ry.v, rz.v]), { is3d: true });
+      const xs = linspace(a0, a1, G), ys = linspace(b0, b1, G), zs = linspace(c0, c1, G);
+      const colors = listOpt(opts.named.color);
+      const PALETTE3D = ['#d9a400', '#3c78d8', '#6aa84f', '#c27ba0', '#e69138', '#45818e'];
+      const data = eqs.map((e, idx) => {
+        const F = numFn(eqToExpr(e), [rx.v, ry.v, rz.v], 'implicitplot3d');
+        const X = [], Y = [], Z = [], V = [];
+        for (const x of xs) for (const y of ys) for (const z of zs) { X.push(x); Y.push(y); Z.push(z); V.push(F(x, y, z)); }
+        const c = colors[idx] !== undefined ? colorName(colors[idx]) : colors.length === 1 ? colorName(colors[0]) : PALETTE3D[idx % PALETTE3D.length];
+        const t = { type: 'isosurface', x: X, y: Y, z: Z, value: V, isomin: 0, isomax: 0, surface: { count: 1 }, caps: { x: { show: false }, y: { show: false }, z: { show: false } },
+          showscale: false, colorscale: [[0, c], [1, c]], hoverinfo: 'skip' };
+        if (opts.named.transparency) t.opacity = 1 - N(tr(opts.named.transparency));
+        return t;
+      });
+      const L = base3D(opts, [rx.v, ry.v, rz.v]);
+      L.scene.xaxis.range = [a0, a1]; L.scene.yaxis.range = [b0, b1]; L.scene.zaxis.range = [c0, c1];
+      return plotResult(data, L, { is3d: true });
+    },
+
+    // curva de interseção de duas superfícies implícitas: intersectplot(S1, S2, x = .., y = .., z = ..)
+    intersectplot(args) {
+      const opts = parseOpts(args.slice(2));
+      const [rx, ry, rz] = opts.ranges;
+      if (!rx || !ry || !rz) throw err('intersectplot', 'expecting ranges for x, y and z, e.g. x = -4 .. 4, y = -4 .. 4, z = -4 .. 4');
+      const vars = [rx.v, ry.v, rz.v];
+      const F = numFn(eqToExpr(args[0]), vars, 'intersectplot'), Gf = numFn(eqToExpr(args[1]), vars, 'intersectplot');
+      const lo = [rangeOf(rx)[0], rangeOf(ry)[0], rangeOf(rz)[0]], hi = [rangeOf(rx)[1], rangeOf(ry)[1], rangeOf(rz)[1]];
+      const span = hi.map((h, k) => h - lo[k]);
+      const inside = p => p.every((v, k) => v >= lo[k] - 1e-9 && v <= hi[k] + 1e-9);
+      const pts = [];
+      // fatias em cada eixo; em cada fatia resolve F = G = 0 nas outras duas variáveis por Newton a partir de uma grade
+      const SL = 140, SEED = 16;
+      for (let axis = 0; axis < 3; axis++) {
+        const [i, j] = [0, 1, 2].filter(k => k !== axis);
+        for (let s = 0; s <= SL; s++) {
+          const fixed = lo[axis] + span[axis] * s / SL;
+          const found = [];
+          for (let u = 0; u <= SEED; u++) for (let w = 0; w <= SEED; w++) {
+            const p = [0, 0, 0]; p[axis] = fixed; p[i] = lo[i] + span[i] * u / SEED; p[j] = lo[j] + span[j] * w / SEED;
+            let ok = false;
+            for (let it = 0; it < 25; it++) {
+              const f = F(...p), g = Gf(...p);
+              if (!isFinite(f) || !isFinite(g)) break;
+              if (Math.abs(f) + Math.abs(g) < 1e-10) { ok = true; break; }
+              const hi_ = 1e-6 * (1 + Math.abs(p[i])), hj = 1e-6 * (1 + Math.abs(p[j]));
+              const pi = p.slice(); pi[i] += hi_; const pj = p.slice(); pj[j] += hj;
+              const fi = (F(...pi) - f) / hi_, fj = (F(...pj) - f) / hj, gi = (Gf(...pi) - g) / hi_, gj = (Gf(...pj) - g) / hj;
+              const det = fi * gj - fj * gi;
+              if (!isFinite(det) || Math.abs(det) < 1e-14) break;
+              p[i] -= (f * gj - fj * g) / det; p[j] -= (fi * g - f * gi) / det;
+              if (Math.abs(p[i] - lo[i]) > 3 * span[i] || Math.abs(p[j] - lo[j]) > 3 * span[j]) break;
+            }
+            if (ok && inside(p) && !found.some(q => Math.abs(q[i] - p[i]) < 1e-6 * (1 + span[i]) && Math.abs(q[j] - p[j]) < 1e-6 * (1 + span[j]))) found.push(p.slice());
+          }
+          pts.push(...found);
+        }
+      }
+      if (!pts.length) throw err('intersectplot', 'the surfaces do not intersect inside the given ranges');
+      // liga os pontos em curvas pelo vizinho mais próximo (normalizado pelas faixas)
+      const dist = (p, q) => Math.hypot(...p.map((v, k) => (v - q[k]) / span[k]));
+      const uniq = [];
+      for (const p of pts) if (!uniq.some(q => dist(p, q) < 2e-3)) uniq.push(p);
+      const used = new Array(uniq.length).fill(false);
+      const gap = 6 / SL;
+      const X = [], Y = [], Z = [];
+      const chain = start => {
+        const line = [uniq[start]]; used[start] = true;
+        for (const dir of [1, -1]) {
+          let cur = dir === 1 ? line[line.length - 1] : line[0];
+          for (;;) {
+            let best = -1, bd = Infinity;
+            for (let k = 0; k < uniq.length; k++) if (!used[k]) { const d = dist(cur, uniq[k]); if (d < bd) { bd = d; best = k; } }
+            if (best < 0 || bd > gap) break;
+            used[best] = true; cur = uniq[best];
+            if (dir === 1) line.push(cur); else line.unshift(cur);
+          }
+        }
+        // fecha a curva se as pontas estão próximas
+        if (line.length > 3 && dist(line[0], line[line.length - 1]) < gap) line.push(line[0]);
+        return line;
+      };
+      for (let k = 0; k < uniq.length; k++) if (!used[k]) {
+        const line = chain(k);
+        for (const p of line) { X.push(p[0]); Y.push(p[1]); Z.push(p[2]); }
+        X.push(null); Y.push(null); Z.push(null);
+      }
+      const st = lineStyle(opts, 0);
+      const L = base3D(opts, vars);
+      L.scene.xaxis.range = [lo[0], hi[0]]; L.scene.yaxis.range = [lo[1], hi[1]]; L.scene.zaxis.range = [lo[2], hi[2]];
+      return plotResult([{ type: 'scatter3d', mode: 'lines', x: X, y: Y, z: Z, line: { color: opts.named.color ? st.color : '#c40000', width: Math.max(4, st.width + 3) }, hoverinfo: 'skip' }], L, { is3d: true });
     },
 
     pointplot(args) {
