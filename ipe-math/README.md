@@ -19,6 +19,9 @@ Abra `index.html` no navegador (precisa de internet na primeira carga para baixa
 |---|---|
 | Derivadas | `diff(f(x), x)`, `diff(f(x), x$2)`, `D(f)`, `D(f)(2)`, `D[1](h)`, `(D@@2)(f)`, `f'(x)`, `Diff(f(x), x)` (forma não avaliada), `implicitdiff(eq, y, x)` |
 | Cálculo | `int(f, x)`, `int(f, x = a .. b)`, `limit(f, x = a)`, `sum(f, k = a .. b)`, `product`, `add`, `mul`, `seq`, `taylor(f, x = a, n)`, `series`, formas não avaliadas `Int`, `Sum`, `Limit`, `Product` e `value(%)` |
+| Cálculo 2 (várias variáveis) | parciais `diff(f(x, y), x, y)`, `D[1, 2](f)`; pontos críticos `solve({fx = 0, fy = 0}, {x, y})` (sistemas não lineares); `with(VectorCalculus)`: `Gradient`, `Hessian`, `Jacobian`, `Laplacian`, `DirectionalDiff`, `Divergence`, `Curl`; `with(Student[MultivariateCalculus])`: `TangentPlane`, `SecondDerivativeTest`, `LagrangeMultipliers`, `DirectionalDerivative`, `MultiInt`, `TaylorApproximation`; `with(linalg)`: `grad`, `hessian`, `jacobian`, `det`; `mtaylor` |
+| Integrais múltiplas | `int(int(f, y = g1(x) .. g2(x)), x = a .. b)`, `int(f, [x = a .. b, y = c .. d])`, triplas, polares (`r*dr*dθ`), `Int(Int(...))` + `value(%)`, `evalf(Int(Int(...)))` numérico; resultados simbólicos conferidos numericamente |
+| Séries | `sum(1/n^2, n = 1 .. infinity)` = π²/6, geométricas, telescópicas, `x^n/n!` = eˣ, divergência de p-séries/harmônica, somas finitas simbólicas `sum(k^2, k = 1 .. n)` |
 | Equações | `solve(eq, x)`, `solve({eq1, eq2}, {x, y})`, `fsolve(eq, x)`, `fsolve(eq, x = a .. b)`, `lhs`, `rhs` |
 | Álgebra | `factor`, `expand`, `simplify`, `normal`, `convert(f, parfrac, x)`, `subs(x = a, f)`, `eval(f, x = a)`, `numer`, `denom`, `coeff`, `degree`, `collect` |
 | Numérico | `evalf(e)`, `evalf(e, n)`, `evalf[n](e)`, `Digits := n`, `ifactor`, `isprime`, `ithprime`, `igcd`, `ilcm`, `irem`, `iquo`, `binomial`, `n!` |

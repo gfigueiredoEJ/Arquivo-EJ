@@ -104,7 +104,9 @@ function MapleKernelFactory(global) {
   }
 
   function evalfStr(expr, digits) {
-    const txt = nd(expr).evaluate().text('decimals');
+    let txt = nd(expr).evaluate().text('decimals');
+    const cm = /^(-?[\d.]+(?:e[+-]?\d+)?)([+-][\d.]+(?:e[+-]?\d+)?)\*i$/.exec(txt);
+    if (cm && Math.abs(Number(cm[2])) < 1e-7 * (1 + Math.abs(Number(cm[1])))) txt = cm[1];
     if (/^-?[\d.]+(e[+-]?\d+)?$/.test(txt)) return fmtFloat(Number(txt), digits);
     return floatify(txt, digits);
   }
@@ -184,7 +186,7 @@ function MapleKernelFactory(global) {
           continue;
         }
         if (sub !== null) { i = i + name.length; out += CONST[name] || name; continue; }
-        out += Object.prototype.hasOwnProperty.call(CONST, name) ? CONST[name] : state.eqs.has(name) ? state.eqs.get(name) : name;
+        out += Object.prototype.hasOwnProperty.call(CONST, name) ? CONST[name] : state.eqs.has(name) ? state.eqs.get(name) : state.vars.has(name) ? `(${nd(vn(name)).toString()})` : name;
         i = j;
         continue;
       }
@@ -297,18 +299,28 @@ function MapleKernelFactory(global) {
   // Valor de uma chamada aninhada (string nerdamer)
   // comandos que só existem depois de with(pacote) ou com pacote:-comando
   const PKG_OF = {};
+  const addPkg = (c, p) => { PKG_OF[c] = (PKG_OF[c] || []).concat(p); };
   ['CharacteristicPolynomial', 'ColumnDimension', 'CrossProduct', 'Determinant', 'DotProduct', 'Eigenvalues', 'IdentityMatrix', 'LinearSolve',
-    'MatrixInverse', 'Rank', 'RowDimension', 'Trace', 'Transpose'].forEach(c => { PKG_OF[c] = 'LinearAlgebra'; });
-  ['laplace', 'invlaplace'].forEach(c => { PKG_OF[c] = 'inttrans'; });
+    'MatrixInverse', 'Rank', 'RowDimension', 'Trace', 'Transpose'].forEach(c => addPkg(c, 'LinearAlgebra'));
+  ['laplace', 'invlaplace'].forEach(c => addPkg(c, 'inttrans'));
+  ['Gradient', 'Hessian', 'Jacobian', 'Laplacian', 'Divergence', 'Curl', 'DirectionalDiff', 'VectorField', 'SetCoordinates'].forEach(c => addPkg(c, 'VectorCalculus'));
+  ['Gradient', 'Hessian', 'Jacobian', 'DirectionalDerivative', 'TangentPlane', 'SecondDerivativeTest', 'LagrangeMultipliers', 'MultiInt', 'TaylorApproximation', 'CriticalPoints'].forEach(c => addPkg(c, 'Student_MultivariateCalculus'));
+  ['grad', 'hessian', 'jacobian', 'laplacian', 'diverge', 'curl', 'det', 'inverse', 'transpose'].forEach(c => addPkg(c, 'linalg'));
   ['animate', 'contourplot', 'densityplot', 'display', 'fieldplot', 'gradplot', 'implicitplot', 'implicitplot3d', 'inequal', 'logplot', 'loglogplot',
-    'odeplot', 'pointplot', 'pointplot3d', 'polarplot', 'semilogplot', 'spacecurve', 'textplot'].forEach(c => { PKG_OF[c] = 'plots'; });
-  const pkgPrefix = src => String(src).replace(/\b(LinearAlgebra|inttrans|plots|Student|student)\s*:-\s*([A-Za-z_]\w*)/g, 'PKGOK__$2');
+    'odeplot', 'pointplot', 'pointplot3d', 'polarplot', 'semilogplot', 'spacecurve', 'textplot'].forEach(c => addPkg(c, 'plots'));
+  const PKGS = 'LinearAlgebra|inttrans|plots|VectorCalculus|linalg|Student|student';
+  const pkgPrefix = src => String(src)
+    .replace(/\bStudent\s*\[\s*MultivariateCalculus\s*\]\s*\[\s*([A-Za-z_]\w*)\s*\]/g, 'PKGOK__$1')
+    .replace(/\bStudent\s*:-\s*MultivariateCalculus\s*:-\s*([A-Za-z_]\w*)/g, 'PKGOK__$1')
+    .replace(new RegExp(`\\b(${PKGS})\\s*\\[\\s*([A-Za-z_]\\w*)\\s*\\](?=\\s*\\()`, 'g'), 'PKGOK__$2')
+    .replace(new RegExp(`\\b(${PKGS})\\s*:-\\s*([A-Za-z_]\\w*)`, 'g'), 'PKGOK__$2');
   function cmdName(name) {
     let ok = false;
     if (name.startsWith('PKGOK__')) { name = name.slice(7); ok = true; }
-    const pkg = PKG_OF[name];
-    if (pkg && !ok && !state.packages.has(pkg) && !state.funcs.has(name) && !state.procs.has(name)) {
-      throw err(null, `${name} is part of the ${pkg} package: load it first with  with(${pkg}):  or call it as  ${pkg}:-${name}(...)`);
+    const pkgs = PKG_OF[name];
+    if (pkgs && !ok && !pkgs.some(p => state.packages.has(p)) && !state.funcs.has(name) && !state.procs.has(name)) {
+      const pkg = pkgs[0], shown = pkg === 'Student_MultivariateCalculus' ? 'Student[MultivariateCalculus]' : pkg;
+      throw err(null, `${name} is part of the ${shown} package: load it first with  with(${shown}):  or call it as  ${shown}[${name}](...)`);
     }
     return name;
   }
@@ -382,7 +394,7 @@ function MapleKernelFactory(global) {
   const R = (value, t) => {
     if (/factorial\(\d+\)/.test(value)) value = nd(bigFact(value)).toString();
     if (/e\^log\(/.test(value)) value = nd(fixExpLog(value)).toString();
-    return { value, tex: t !== undefined ? t : tex(value) };
+    return { value, tex: t !== undefined ? t : prettyTex(value) };
   };
   const seqR = (itemsIn, wrap = '') => { // sequência de expressões
     const items = itemsIn;
@@ -437,6 +449,42 @@ function MapleKernelFactory(global) {
     try { fn(); } finally { if (had) setUserVar(v, old); else clearUserVar(v); }
   }
   function hasProcCall(src) { return [...String(src).matchAll(/([A-Za-z_]\w*)\s*\(/g)].some(m => state.procs.has(m[1])); }
+  // integral definida: simbólica, conferida numericamente; se o motor errar ou não fechar, usa o valor numérico
+  function defInt(args) {
+    const { v, a, b } = parseRange(args[1], 'int');
+    const f = tr(args[0]);
+    let r = null;
+    try {
+      r = nd(`defint(${f},${a},${b},${v})`).toString();
+      if (/defint|integrate/.test(r)) r = null;
+    } catch (e) { r = null; }
+    if (r === null) {
+      try {
+        const F = nd(`integrate(${f},${v})`).toString();
+        if (!/integrate/.test(F)) {
+          const atp = pt => (/Infinity/.test(pt) ? nd(`limit(${F},${v},${pt})`).toString() : nd(F, { [v]: `(${pt})` }).toString());
+          r = nd(`simplify((${atp(b)})-(${atp(a)}))`).toString();
+        }
+      } catch (e) { r = null; }
+    }
+    if (r !== null) { try { r = simplifyInf(r); } catch (e) {} }
+    // conferência numérica (só quando a integral é numérica: sem variáveis livres)
+    let num = NaN;
+    const free = (() => { try { return [...new Set(nd(f).variables().concat(nd(a).variables(), nd(b).variables()))].filter(x => x !== v); } catch (e) { return ['?']; } })();
+    if (!free.length) { try { num = numEval(`Int(${args[0]}, ${args[1]})`, {}); } catch (e) { num = NaN; } }
+    const symOk = r !== null && !/Infinity|limit|NaN|\bi\b|erf\(\s*i/.test(r) && (!isFinite(num) || (() => { try { const sv = N(r); return isFinite(sv) && Math.abs(sv - num) <= 1e-6 * (1 + Math.abs(num)); } catch (e) { return false; } })());
+    if (symOk) return R(r);
+    if (r !== null && free.length && !/limit|NaN/.test(r)) return R(r);
+    if (isFinite(num)) return { value: String(num), tex: fmtFloat(num, state.digits) };
+    if (r !== null && /Infinity/.test(r) && !isFinite(num)) return R(r);
+    return R(`int(${f},${v}=${a}..${b})`, `\\int_{${tex(a)}}^{${tex(b)}} ${tex(f)}\\,d${v}`);
+  }
+  // frações com numerador e denominador enormes (aproximações do motor) aparecem em decimal
+  function prettyTex(v) {
+    const m = /^(-?)(\d{7,})\/(\d{7,})$/.exec(String(v).replace(/[()]/g, ''));
+    if (m) return fmtFloat(Number(m[1] + m[2]) / Number(m[3]), state.digits);
+    return tex(v);
+  }
   function fixExpLog(s) {
     for (let guard = 0; guard < 20; guard++) {
       const k = s.indexOf('e^log(');
@@ -532,8 +580,14 @@ function MapleKernelFactory(global) {
       return R(nd(`simplify(-(${Fx})/(${Fy}))`).toString());
     },
     int(args) {
-      const f = tr(args[0]);
       if (!args[1]) throw err('int', 'expecting 2 arguments');
+      if (isWrapped(args[1], '[', ']')) { // int(f, [x = a .. b, y = c .. d]): x por dentro
+        let body = args[0];
+        for (const r of listOrSet(args[1])) body = `int(${body}, ${r})`;
+        return evalExpr(body);
+      }
+      if (/\.\./.test(args[1])) return defInt(args);
+      const f = tr(args[0]);
       if (args[1].includes('..')) {
         const { v, a, b } = parseRange(args[1], 'int');
         let r = null;
@@ -590,8 +644,41 @@ function MapleKernelFactory(global) {
     sum(args) {
       if (!args[1] || !args[1].includes('..')) throw err('sum', 'indefinite sums are not supported');
       const { v, a, b } = parseRange(args[1], 'sum');
+      if (/Infinity/.test(nd(b).toString()) && hasProcCall(args[0])) throw err('sum', 'infinite sums of procedures: use evalf(Sum(...))');
       // com limites numéricos e chamadas de proc, soma termo a termo; senão, soma simbólica
       if (hasProcCall(args[0]) && isFinite(N(a)) && isFinite(N(b))) return R(nd(iterate(args[0], v, a, b).map(x => `(${x})`).join('+') || '0').toString());
+      const term = nd(tr(args[0])).toString();
+      if (/Infinity/.test(nd(b).toString())) {
+        const r0 = infiniteSum(term, v, a);
+        if (r0 && typeof r0 === 'object') return r0;
+        if (r0) return R(r0);
+        return R(`sum(${term},${v},${a},Infinity)`, `\\sum_{${v}=${tex(a)}}^{\\infty} ${tex(term)}`);
+      }
+      if (nd(b).variables().length || nd(a).variables().length) {
+        const deg = degIn(term, v);
+        const expoVar = new RegExp('\\^\\(?[^)]*\\b' + v + '\\b').test(term) || new RegExp('\\b(sin|cos|tan|exp|log|factorial)\\([^)]*\\b' + v + '\\b').test(term);
+        if (deg <= 12 && !expoVar) {
+          const r1 = polyInterpSum(term, v, a, b);
+          if (r1) { // conferência: b = a + 7
+            const free = nd(b).variables()[0];
+            let ok = true;
+            try {
+              if (free) {
+                const bb = nd(b, { [free]: '9' }).toString(), aa = nd(a, { [free]: '9' }).toString();
+                let direct = '0'; for (let k = N(aa); k <= N(bb); k++) direct = nd(`(${direct})+(${nd(term, { [v]: String(k) }).toString()})`).toString();
+                ok = Math.abs(N(nd(r1, { [free]: '9' }).toString()) - N(direct)) < 1e-6 * (1 + Math.abs(N(direct)));
+              }
+            } catch (e) { ok = false; }
+            if (ok) return R(r1);
+          }
+        }
+        // geométrica finita: c*r^k
+        try {
+          const rk = k => nd(`simplify((${nd(term, { [v]: String(k + 1) }).toString()})/(${nd(term, { [v]: String(k) }).toString()}))`).toString();
+          const ratio = rk(2);
+          if (nd(`simplify((${ratio})-(${rk(5)}))`).toString() === '0' && ratio !== '1') return R(nd(`simplify((${nd(term, { [v]: `(${a})` }).toString()})*((${ratio})^((${b})-(${a})+1)-1)/((${ratio})-1))`).toString());
+        } catch (e) {}
+      }
       const r = nd(`sum(${tr(args[0])},${v},${a},${b})`).toString();
       if (/^sum\(/.test(r) && isFinite(N(a)) && isFinite(N(b)) && N(b) - N(a) <= 5000) return R(nd(iterate(args[0], v, a, b).map(x => `(${x})`).join('+') || '0').toString());
       return R(r);
@@ -646,10 +733,19 @@ function MapleKernelFactory(global) {
         const uniq = sols.map(prettySol).filter(x => { const k = typeof x === 'string' ? nd(x).toString() : x.tex; if (seen.has(k)) return false; seen.add(k); return true; });
         return seqR(uniq);
       }
-      const sol = nd.solveEquations(exprs.map(x => `${x}=0`), vars);
-      if (!sol || !sol.length) return { value: '[]', tex: '\\text{(no solutions found)}' };
-      const items = sol.map(([v, val]) => ({ value: `${v}=${val}`, tex: `${v} = ${tex(String(val))}` }));
-      return seqR(items, '{');
+      let sol = null;
+      if (isLinearSystem(exprs, vars)) { try { sol = nd.solveEquations(exprs.map(x => `${x}=0`), vars); } catch (e) { sol = null; } }
+      if (sol && sol.length && sol.length === vars.length) {
+        const items = sol.map(([v, val]) => ({ value: `${v}=${val}`, tex: `${v} = ${tex(String(val))}` }));
+        return seqR(items, '{');
+      }
+      // sistema não linear: fatoração + substituição, com várias soluções (como o Maple)
+      const exprsN = exprs.map(x => nd(x).toString());
+      let sols = dedupeSols(solveSys(exprsN, vars) || [], vars, exprsN);
+      const realOnly = sols.filter(sl => vars.every(v => !/\bi\b/.test(nd(sl[v]).toString())));
+      if (realOnly.length) sols = realOnly;
+      if (!sols.length) return { value: '[]', tex: '\\text{(no solutions found)}' };
+      return seqR(sols.map(sl => ({ value: `[${vars.map(v => `${v}=${sl[v]}`).join(',')}]`, tex: `\\left\\{${vars.map(v => `${tex(v)} = ${prettyTex(sl[v])}`).join(',\\; ')}\\right\\}` })));
     },
     fsolve(args) {
       const expr = eqToExpr(args[0]);
@@ -688,8 +784,14 @@ function MapleKernelFactory(global) {
     /* ---------- Avaliação ---------- */
     evalf(args, sub) {
       const digits = sub ? Number(N(tr(sub))) : args[1] ? Number(N(tr(args[1]))) : state.digits;
+      const raw0 = args[0].trim();
+      if (/^(int|Int|sum|Sum)\s*\(/.test(raw0) || (/\b(Int|Sum)\s*\(/.test(raw0))) {
+        const val = numEval(raw0, {});
+        if (isFinite(val)) return { value: String(val), tex: fmtFloat(val, digits) };
+      }
       const v = tr(args[0]);
       if (isMatrix(v)) return R(v);
+      if (/\bint\(|defint\(|sum\(/.test(v)) { const val = numEval(v.replace(/\bdefint\(/g, 'int('), {}); if (isFinite(val)) return { value: String(val), tex: fmtFloat(val, digits) }; }
       const s = evalfStr(v, digits);
       return { value: s.replace(/ 10\^\((-?\d+)\)/, 'e$1'), tex: floatTeX(s) };
     },
@@ -697,7 +799,7 @@ function MapleKernelFactory(global) {
       const target = resolveRaw(args[args.length - 1]);
       const list = args.slice(0, -1).flatMap(a => listOrSet(resolveRaw(a)));
       const doSub = expr => {
-        let e = tr(expr);
+        let e = nd(tr(expr)).toString();
         for (const sb of list) {
           const q = parseEq(sb); if (!q) throw err('subs', `invalid substitution: ${sb}`);
           e = nd(e, { [q.lhs.trim()]: `(${tr(q.rhs)})` }).toString();
@@ -711,7 +813,7 @@ function MapleKernelFactory(global) {
       const target = resolveRaw(args[0]);
       const list = args[1] ? listOrSet(resolveRaw(args[1])) : [];
       const doEval = expr => {
-        let e = tr(expr);
+        let e = nd(tr(expr)).toString();
         for (const sb of list) {
           const q = parseEq(sb); if (!q) throw err('eval', `invalid evaluation point: ${sb}`);
           e = nd(e, { [q.lhs.trim()]: `(${tr(q.rhs)})` }).toString();
@@ -721,7 +823,7 @@ function MapleKernelFactory(global) {
       return mapEq(target, doEval);
     },
     value(args) { return R(tr(args[0])); },
-    simplify(args) { return mapEq(tr(args[0]), e => nd(fixExpLog(nd(`simplify(${e})`).toString())).toString()); },
+    simplify(args) { return mapEq(tr(args[0]), e => trigSimplify(nd(fixExpLog(nd(`simplify(${e})`).toString())).toString())); },
     expand(args) { return mapEq(tr(args[0]), e => nd(`expand(${expandTrig(nd(`expand(${e})`).toString())})`).toString()); },
     factor(args) { return R(nd(`factor(${tr(args[0])})`).toString()); },
     convert(args) {
@@ -784,6 +886,13 @@ function MapleKernelFactory(global) {
     exp(args) { return R(nd(`e^(${tr(args[0])})`).toString()); },
 
     /* ---------- Álgebra linear ---------- */
+    Determinant(args) {
+      const A = tr(args[0]);
+      const rows = toRows(A);
+      const symbolic = rows.some(r => r.some(x => nd(x).variables().length));
+      if (!symbolic) return R(nd(`determinant(${A})`).toString());
+      return R(trigSimplify(nd(`expand(${detSym(rows)})`).toString()));
+    },
     Matrix(args) {
       if (args.length === 1 && isWrapped(args[0], '[', ']')) {
         const rows = splitTop(unwrap(args[0])).map(r => '[' + listOrSet(r).map(tr).join(',') + ']');
@@ -866,10 +975,13 @@ function MapleKernelFactory(global) {
 
     /* ---------- Sessão ---------- */
     with(args) {
-      const pkg = args[0].trim();
+      const pkg = args[0].trim().replace(/^Student\s*\[\s*MultivariateCalculus\s*\]$/, 'Student_MultivariateCalculus').replace(/^Student\s*:-\s*MultivariateCalculus$/, 'Student_MultivariateCalculus');
       const EXPORTS = {
         LinearAlgebra: ['CharacteristicPolynomial', 'ColumnDimension', 'CrossProduct', 'Determinant', 'DotProduct', 'Eigenvalues', 'IdentityMatrix', 'LinearSolve', 'MatrixInverse', 'Rank', 'RowDimension', 'Trace', 'Transpose'],
         inttrans: ['invlaplace', 'laplace'],
+        VectorCalculus: ['Curl', 'DirectionalDiff', 'Divergence', 'Gradient', 'Hessian', 'Jacobian', 'Laplacian', 'SetCoordinates', 'VectorField'],
+        Student_MultivariateCalculus: ['CriticalPoints', 'DirectionalDerivative', 'Gradient', 'Hessian', 'Jacobian', 'LagrangeMultipliers', 'MultiInt', 'SecondDerivativeTest', 'TangentPlane', 'TaylorApproximation'],
+        linalg: ['curl', 'det', 'diverge', 'grad', 'hessian', 'inverse', 'jacobian', 'laplacian', 'transpose'],
         plots: ['animate', 'contourplot', 'densityplot', 'display', 'fieldplot', 'gradplot', 'implicitplot', 'implicitplot3d', 'inequal', 'logplot', 'loglogplot', 'odeplot', 'pointplot', 'pointplot3d', 'polarplot', 'semilogplot', 'spacecurve', 'textplot'],
         student: [], Student: [],
       };
@@ -892,7 +1004,7 @@ function MapleKernelFactory(global) {
   Object.assign(CMD, {
     inverse: CMD.MatrixInverse,
     Int(a) {
-      const r = CMD.int(a); const f = tex(tr(a[0]));
+      const r = CMD.int(a); const f = sideR(a[0]).tex;
       if (a[1] && a[1].includes('..')) { const g = parseRange(a[1], 'Int'); return { value: r.value, tex: `\\int_{${tex(g.a)}}^{${tex(g.b)}} ${f}\\,d${g.v}` }; }
       return { value: r.value, tex: `\\int ${f}\\,d${(a[1] || 'x').trim()}` };
     },
@@ -902,7 +1014,7 @@ function MapleKernelFactory(global) {
   });
 
   function series(args, name) {
-    const f = tr(args[0]);
+    const f = nd(tr(args[0])).toString();
     let v = 'x', a = '0';
     const e = parseEq(args[1] || 'x');
     if (e) { v = e.lhs.trim(); a = tr(e.rhs); } else v = (args[1] || 'x').trim();
@@ -1171,6 +1283,16 @@ function MapleKernelFactory(global) {
         return t;
       };
       let data;
+      const coords = (opts.named.coords || '').replace(/\[.*$/, '');
+      if (coords === 'spherical' || coords === 'cylindrical') {
+        const Rf = numFn(list[0], [vx, vy], 'plot3d');
+        // esféricas (Maple): r(θ, φ) com θ a primeira faixa, φ a segunda; cilíndricas: r(θ, z)
+        const fx = coords === 'spherical' ? (u, w) => Rf(u, w) * Math.sin(w) * Math.cos(u) : (u, w) => Rf(u, w) * Math.cos(u);
+        const fy = coords === 'spherical' ? (u, w) => Rf(u, w) * Math.sin(w) * Math.sin(u) : (u, w) => Rf(u, w) * Math.sin(u);
+        const fz = coords === 'spherical' ? (u, w) => Rf(u, w) * Math.cos(w) : (u, w) => w;
+        data = [surf(fz, fx, fy, 0)];
+        return plotResult(data, Object.assign(base3D(opts, ['x', 'y', 'z']), {}), { is3d: true });
+      }
       if (list.length === 3 && isWrapped(first, '[', ']') && !list.some(isNameOfFn)) {
         data = [surf(numFn(list[2], [vx, vy], 'plot3d'), numFn(list[0], [vx, vy], 'plot3d'), numFn(list[1], [vx, vy], 'plot3d'), 0)];
       } else {
@@ -1871,6 +1993,413 @@ function MapleKernelFactory(global) {
   const vn = name => (name === 'i' ? 'iI' : name);
   function pushHistory(v) { state.history.push(v); if (state.history.length > 3) state.history.shift(); }
 
+  /* ======================= Cálculo 2: sistemas, integração numérica, séries, várias variáveis ======================= */
+
+  // ---------- sistemas de equações (inclusive não lineares) por fatoração e substituição ----------
+  function factorList(expr) {
+    let f;
+    try { f = nd(`factor(${expr})`).toString(); } catch (e) { f = expr; }
+    const parts = splitSum(f.replace(/^-/, '')).length > 1 ? [f] : splitProduct(f.replace(/^-(?=\()/, ''));
+    const base = p => {
+      const m = /^\(([\s\S]*)\)\^\d+$/.exec(p);
+      if (m && matchClose(p, 0) === p.lastIndexOf(')')) return m[1];
+      const k = /^([A-Za-z_]\w*)\^\d+$/.exec(p);
+      return k ? k[1] : p;
+    };
+    return parts.map(base).filter(p => { try { return nd(p).variables().length > 0; } catch (e) { return true; } });
+  }
+  function splitProduct(s) { // fatores de um produto no nível superior
+    const out = []; let depth = 0, cur = '';
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth--;
+      if (ch === '*' && depth === 0 && s[i + 1] !== '*' && s[i - 1] !== '*') { out.push(cur); cur = ''; continue; }
+      cur += ch;
+    }
+    out.push(cur);
+    return out.map(t => t.trim()).filter(Boolean);
+  }
+  const degIn = (e, v) => { try { const d = nd(`deg(${e},${v})`).toString(); return /^\d+$/.test(d) ? +d : 99; } catch (x) { return 99; } };
+  function numerOf(e) { try { return nd(e).symbol.getNum().text(); } catch (x) { return e; } }
+  function cleanEq(e) { // numerador expandido de uma equação já em forma "expr = 0"
+    let s;
+    try { s = nd(`expand(${e})`).toString(); } catch (x) { s = e; }
+    try { if (/\^\(-|\//.test(s)) s = nd(`expand(${numerOf(nd(`simplify(${s})`).toString())})`).toString(); } catch (x) {}
+    return s;
+  }
+  // penaliza resolver por uma variável cujo coeficiente depende das outras (dividir por ele perde soluções)
+  function coefPenalty(f, v, vars) {
+    try { const c = nd(`diff(${f},${v})`).toString(); return nd(c).variables().some(x => vars.includes(x)) ? 6 : 0; } catch (e) { return 6; }
+  }
+  function isLinearSystem(exprs, vars) {
+    try {
+      return exprs.every(e => vars.every(a => vars.every(b => nd(`diff(diff(${e},${a}),${b})`).toString() === '0')));
+    } catch (e) { return false; }
+  }
+  function solveSys(eqs, vars, depth = 0) {
+    if (depth > 8) return [];
+    eqs = eqs.map(cleanEq).filter(e => e !== '0');
+    for (const e of eqs) { try { if (!nd(e).variables().some(v => vars.includes(v))) { const v = N(e); if (isFinite(v) && Math.abs(v) > 1e-12) return []; if (!nd(e).variables().length) continue; } } catch (x) {} }
+    eqs = eqs.filter(e => nd(e).variables().some(v => vars.includes(v)));
+    if (!eqs.length) return [{}];
+    // escolhe a equação e a variável mais fáceis (menor grau)
+    let best = null;
+    for (const e of eqs) {
+      for (const f of factorList(e)) {
+        for (const v of vars) {
+          const d = degIn(f, v);
+          if (d >= 1 && d <= 4) { const score = d * 10 + nd(f).variables().length + factorList(e).length + coefPenalty(f, v, vars); if (!best || score < best.score) best = { e, score }; }
+        }
+      }
+    }
+    if (!best) return null; // não conseguimos
+    const results = [];
+    const rest = eqs.filter(x => x !== best.e);
+    for (const f of factorList(best.e)) {
+      let choice = null;
+      for (const v of vars) { const d = degIn(f, v); const sc = d * 10 + coefPenalty(f, v, vars); if (d >= 1 && d <= 4 && (!choice || sc < choice.sc)) choice = { v, d, sc }; }
+      if (!choice) continue;
+      let sols;
+      try { sols = splitTop(nd(`solve(${f},${choice.v})`).toString().replace(/^\[|\]$/g, '')).filter(Boolean); } catch (x) { sols = []; }
+      for (const s of sols) {
+        const sub = rest.map(r => nd(r, { [choice.v]: `(${s})` }).toString());
+        const others = vars.filter(v => v !== choice.v);
+        const subRes = solveSys(sub, others, depth + 1);
+        if (!subRes) continue;
+        for (const r of subRes) {
+          const val = Object.keys(r).length ? nd(`simplify(${nd(s, Object.fromEntries(Object.entries(r).map(([k, v]) => [k, `(${v})`]))).toString()})`).toString() : nd(`simplify(${s})`).toString();
+          results.push(Object.assign({}, r, { [choice.v]: val }));
+        }
+      }
+    }
+    // variáveis livres ficam como elas mesmas (como no Maple: x = x)
+    return results.map(r => { const o = {}; vars.forEach(v => { o[v] = r[v] !== undefined ? r[v] : v; }); return o; });
+  }
+  function dedupeSols(sols, vars, eqs) {
+    const seen = new Set(), out = [];
+    for (const s of sols) {
+      // confere numericamente quando possível
+      let ok = true;
+      for (const e of eqs) {
+        try {
+          const v = nd(e, Object.fromEntries(vars.map(x => [x, `(${s[x]})`]))).evaluate().text('decimals');
+          const num = Number(v);
+          if (isFinite(num) && Math.abs(num) > 1e-6) { ok = false; break; }
+        } catch (x) {}
+      }
+      if (!ok) continue;
+      const key = vars.map(v => { try { const n = N(s[v]); return isFinite(n) ? n.toFixed(9) : nd(s[v]).toString(); } catch (x) { return s[v]; } }).join('|');
+      if (seen.has(key)) continue;
+      seen.add(key); out.push(s);
+    }
+    const isReal = s => vars.every(v => !/\bi\b/.test(nd(s[v]).toString()));
+    return out.filter(isReal).concat(out.filter(s => !isReal(s)));
+  }
+
+  // ---------- integração numérica (Simpson adaptativo, com intervalos infinitos) ----------
+  function quad(f, a, b, tol = 1e-10) {
+    if (a === b) return 0;
+    if (a > b) return -quad(f, b, a, tol);
+    if (!isFinite(a) || !isFinite(b)) {
+      if (!isFinite(a) && !isFinite(b)) return quad(t => { const x = t / (1 - t * t); return f(x) * (1 + t * t) / Math.pow(1 - t * t, 2); }, -1 + 1e-9, 1 - 1e-9, tol);
+      if (!isFinite(b)) return quad(t => { const x = a + t / (1 - t); return f(x) / Math.pow(1 - t, 2); }, 0, 1 - 1e-9, tol);
+      return quad(t => { const x = b - t / (1 - t); return f(x) / Math.pow(1 - t, 2); }, 0, 1 - 1e-9, tol);
+    }
+    // Gauss–Legendre de 10 pontos adaptativo (bom para funções suaves, tolera singularidades integráveis nas pontas)
+    const X = [0.1488743389816312, 0.4333953941292472, 0.6794095682990244, 0.8650633666889845, 0.9739065285171717];
+    const W = [0.2955242247147529, 0.2692667193099963, 0.2190863625159820, 0.1494513491505806, 0.0666713443086881];
+    const gl = (p, q) => { const c = (p + q) / 2, h = (q - p) / 2; let s = 0; for (let k = 0; k < 5; k++) { const y1 = f(c - h * X[k]), y2 = f(c + h * X[k]); s += W[k] * ((isFinite(y1) ? y1 : 0) + (isFinite(y2) ? y2 : 0)); } return s * h; };
+    let evals = 0;
+    const rec = (p, q, whole, depth) => {
+      const m = (p + q) / 2, L = gl(p, m), Rr = gl(m, q);
+      evals += 40;
+      if (depth > 18 || evals > 400000 || Math.abs(L + Rr - whole) <= tol * Math.max(1, Math.abs(L + Rr))) return L + Rr;
+      return rec(p, m, L, depth + 1) + rec(m, q, Rr, depth + 1);
+    };
+    return rec(a, b, gl(a, b), 0);
+  }
+  const fnCache = new Map();
+  function compiled(src, vars) {
+    const key = src + '|' + vars.join(',');
+    if (!fnCache.has(key)) { if (fnCache.size > 500) fnCache.clear(); fnCache.set(key, numFn(src, vars, 'evalf')); }
+    return fnCache.get(key);
+  }
+  // valor numérico de uma expressão Maple que pode conter int/Int/sum aninhados; env = {variável: número}
+  function numEval(src, env) {
+    src = src.trim();
+    while (isWrapped(src, '(', ')')) src = unwrap(src).trim();
+    const cm = /^(int|Int|integrate)\s*\(/.exec(src);
+    if (cm && matchClose(src, src.indexOf('(')) === src.length - 1) {
+      const args = splitTop(src.slice(src.indexOf('(') + 1, -1));
+      const ranges = isWrapped(args[1], '[', ']') ? listOrSet(args[1]) : [args[1]];
+      // int(f, [x = .., y = ..]): x é a mais interna
+      let body = args[0];
+      for (const r of ranges) body = `Int(${body}, ${r})`;
+      if (ranges.length > 1) return numEval(body, env);
+      const m = /^\s*([A-Za-z_]\w*)\s*=\s*([\s\S]+?)\s*\.\.\s*([\s\S]+)$/.exec(args[1]);
+      if (!m) throw err('evalf', 'definite integral expected, e.g. Int(f, x = 0 .. 1)');
+      const v = m[1], a = numEval(m[2], env), b = numEval(m[3], env);
+      return quad(t => numEval(args[0], Object.assign({}, env, { [v]: t })), a, b, 1e-9);
+    }
+    const sm = /^(sum|Sum|add)\s*\(/.exec(src);
+    if (sm && matchClose(src, src.indexOf('(')) === src.length - 1) {
+      const args = splitTop(src.slice(src.indexOf('(') + 1, -1));
+      const m = /^\s*([A-Za-z_]\w*)\s*=\s*([\s\S]+?)\s*\.\.\s*([\s\S]+)$/.exec(args[1]);
+      const v = m[1], a = numEval(m[2], env), b = /infinity/.test(m[3]) ? Infinity : numEval(m[3], env);
+      return numSum(k => numEval(args[0], Object.assign({}, env, { [v]: k })), a, b);
+    }
+    // expressão com integrais internas: substitui cada int(...) pelo seu valor numérico
+    if (/\b(int|Int|sum|Sum)\s*\(/.test(src)) {
+      let out = '', i = 0;
+      while (i < src.length) {
+        const mm = /^(int|Int|sum|Sum)\s*\(/.exec(src.slice(i));
+        if (mm && !/\w/.test(src[i - 1] || '')) { const k = matchClose(src, i + mm[1].length); out += `(${numEval(src.slice(i, k + 1), env)})`; i = k + 1; continue; }
+        out += src[i++];
+      }
+      src = out;
+    }
+    const vars = Object.keys(env);
+    const fn = compiled(src, vars);
+    return fn(...vars.map(v => env[v]));
+  }
+  function numSum(term, a, b) {
+    if (isFinite(b)) { let s = 0; for (let k = a; k <= b; k++) s += term(k); return s; }
+    // soma infinita: soma direta + aceleração para séries alternadas
+    let s = 0, k = a, prev = 0; const partial = [];
+    for (; k < a + 20000; k++) { const t = term(k); if (!isFinite(t)) return NaN; s += t; partial.push(s); if (Math.abs(t) < 1e-17 * Math.max(1, Math.abs(s)) && k > a + 20) break; prev = t; }
+    // média de Euler simples para alternadas
+    const n = partial.length;
+    if (n > 100 && Math.sign(term(a + n - 1)) !== Math.sign(term(a + n - 2))) return (partial[n - 1] + partial[n - 2]) / 2;
+    return s;
+  }
+
+  // ---------- somas simbólicas (finitas com n simbólico e séries infinitas conhecidas) ----------
+  function polyInterpSum(term, v, a, b) {
+    // Σ_{v=a}^{b} P(v) para P polinomial: Q(m) = Σ_{v=a}^{m} P(v) por interpolação
+    const P = nd(`expand(${term})`).toString();
+    const d = degIn(P, v);
+    if (d > 12) return null;
+    const pts = [];
+    let acc = '0';
+    for (let j = 0; j <= d + 1; j++) { acc = nd(`(${acc})+(${nd(P, { [v]: `(${a})+${j}` }).toString()})`).toString(); pts.push(acc); }
+    const m = 'msumvar';
+    const terms = pts.map((y, j) => {
+      const num = pts.map((_, k) => (k === j ? null : `(${m}-(${a})-${k})`)).filter(Boolean).join('*') || '1';
+      const den = pts.map((_, k) => (k === j ? null : `(${j - k})`)).filter(Boolean).join('*') || '1';
+      return `(${y})*${num}/(${den})`;
+    });
+    const Q = nd(`expand(${terms.join('+')})`).toString();
+    return nd(`factor(${nd(Q, { [m]: `(${b})` }).toString()})`).toString();
+  }
+  function harmonic(m) { let s = '0'; for (let k = 1; k <= m; k++) s = nd(`(${s})+1/${k}`).toString(); return s; }
+  function infiniteSum(term, v, a) {
+    const A = N(a);
+    const t = nd(term).toString();
+    // geométrica: c * r^v
+    try {
+      const r = nd(`simplify((${nd(t, { [v]: `(${v})+1` }).toString()})/(${t}))`).toString();
+      if (!nd(r).variables().includes(v)) {
+        const rv = N(r);
+        if (isFinite(rv)) {
+          if (Math.abs(rv) >= 1) return nd(t, { [v]: `(${a})` }).toString() === '0' ? null : (rv > 0 ? 'Infinity' : null);
+          return nd(`simplify((${nd(t, { [v]: `(${a})` }).toString()})/(1-(${r})))`).toString();
+        }
+        if (!nd(r).variables().length) return null;
+        // razão simbólica (ex.: x/n…) não serve; razão simbólica constante em v (ex.: x): fórmula geométrica
+        return nd(`simplify((${nd(t, { [v]: `(${a})` }).toString()})/(1-(${r})))`).toString();
+      }
+    } catch (e) {}
+    // série exponencial c*x^n/n!: m = termo*n! tem razão constante em n
+    {
+      try {
+        const m = nd(`simplify((${t})*factorial(${v}))`).toString();
+        const ratio = k => nd(`(${nd(m, { [v]: String(k + 1) }).toString()})/(${nd(m, { [v]: String(k) }).toString()})`).toString();
+        const r1 = nd(`simplify(${ratio(3)})`).toString(), r2 = nd(`simplify(${ratio(7)})`).toString();
+        if (A === 0 && !/factorial/.test(m) && nd(`simplify((${r1})-(${r2}))`).toString() === '0' && r1 !== '1') return nd(`simplify((${nd(m, { [v]: '0' }).toString()})*e^(${r1}))`).toString();
+      } catch (e) {}
+    }
+    {
+      const m = nd(`simplify((${t})*factorial(${v}))`).toString();
+      try {
+        const r = nd(`simplify((${nd(m, { [v]: `(${v})+1` }).toString()})/(${m}))`).toString();
+        if (!nd(r).variables().includes(v) && A === 0 && !/factorial/.test(m)) return nd(`simplify((${nd(m, { [v]: '0' }).toString()})*e^(${r}))`).toString();
+      } catch (e) {}
+    }
+    // p-séries e alternadas: c/n^p, c*(-1)^n/n
+    const pm = /^\(?(-?\d+(?:\/\d+)?)?\)?\*?\(?(\w+)\)?\^\(?-(\d+)\)?$/.exec(t.replace(/\s/g, ''));
+    const pser = (() => { try { const p = -Number(nd(`simplify(log(abs(${t}))/log(${v}))`, {}).toString()); return null; } catch (e) { return null; } })();
+    const ZETA = { 2: 'pi^2/6', 4: 'pi^4/90', 6: 'pi^6/945', 8: 'pi^8/9450' };
+    for (const p of [1, 2, 3, 4, 5, 6, 8]) {
+      for (const c of ['1', '-1']) {
+        // c / v^p
+        if (nd(`simplify((${t})-(${c})/(${v})^${p})`).toString() === '0') {
+          if (p === 1) return c === '1' ? 'Infinity' : '-Infinity';
+          const z = ZETA[p] ? ZETA[p] : `Zeta(${p})`;
+          const head = A >= 1 ? Array.from({ length: A - 1 }, (_, k) => `1/${k + 1}^${p}`).join('+') || '0' : null;
+          if (head === null) return null;
+          if (!ZETA[p]) return { value: `Zeta(${p})`, tex: `${c === '-1' ? '-' : ''}\\zeta\\left(${p}\\right)${head !== '0' ? `-${tex(nd(head).toString())}` : ''}` };
+          return nd(`(${c})*((${z})-(${head}))`).toString();
+        }
+        // (-1)^v / v  e (-1)^(v+1)/v
+        if (p === 1 && A === 1) {
+          if (nd(`simplify((${t})-(${c})*(-1)^(${v})/(${v}))`).toString() === '0') return nd(`(${c})*(-log(2))`).toString();
+          if (nd(`simplify((${t})-(${c})*(-1)^(${v}+1)/(${v}))`).toString() === '0') return nd(`(${c})*log(2)`).toString();
+        }
+      }
+    }
+    // função racional: telescópica por frações parciais; divergente se grau(den) - grau(num) <= 1
+    try {
+      const num = nd(`expand(${nd(t).symbol.getNum().text()})`).toString(), den = nd(`expand(${nd(t).symbol.getDenom().text()})`).toString();
+      const dn = degIn(num, v), dd = degIn(den, v);
+      if (dn < 99 && dd < 99 && dd >= 1 && !/\^\(?[a-z]/i.test(t)) {
+        if (dd - dn <= 1) { const s = N(nd(t, { [v]: '1000' }).toString()); return s > 0 ? 'Infinity' : '-Infinity'; }
+        const pf = nd(`partfrac(${t},${v})`).toString();
+        const terms = splitSum(pf);
+        let total = '0', sumA = '0', ok = true;
+        for (const term0 of terms) {
+          // A/(v + c)
+          const den1 = nd(term0).symbol.getDenom().text(), num1 = nd(term0).symbol.getNum().text();
+          if (degIn(den1, v) !== 1 || nd(num1).variables().includes(v)) { ok = false; break; }
+          const lead = nd(`coeffs(${den1},${v})`).toString().replace(/^\[|\]$/g, '');
+          const [c0, c1] = splitTop(lead);
+          const Acoef = nd(`(${num1})/(${c1})`).toString(), shift = nd(`(${c0})/(${c1})`).toString();
+          if (!/^-?\d+$/.test(shift)) { ok = false; break; }
+          sumA = nd(`(${sumA})+(${Acoef})`).toString();
+          const start = A + Number(shift); // Σ_{n=a}^∞ A/(n+s) = A * (−H_{a+s−1}) + divergente comum
+          total = nd(`(${total})-(${Acoef})*(${harmonic(start - 1)})`).toString();
+        }
+        if (ok && nd(`simplify(${sumA})`).toString() === '0') return nd(`simplify(${total})`).toString();
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  // ---------- simplificação trigonométrica (sin² + cos² = 1) ----------
+  function trigSimplify(s) {
+    const cands = [s];
+    try {
+      const a = nd(`simplify(expand(${s.replace(/sin\(([^()]*(?:\([^()]*\)[^()]*)*)\)\^2/g, '(1-cos($1)^2)')}))`).toString(); cands.push(a);
+      const b = nd(`simplify(expand(${s.replace(/cos\(([^()]*(?:\([^()]*\)[^()]*)*)\)\^2/g, '(1-sin($1)^2)')}))`).toString(); cands.push(b);
+      cands.push(nd(`factor(${a})`).toString());
+    } catch (e) {}
+    const ok = cands.filter(c => { try { nd(c); return true; } catch (e) { return false; } });
+    return ok.sort((p, q) => p.length - q.length)[0];
+  }
+
+  // ---------- comandos de Cálculo 2 ----------
+  const varsOf = a => listOrSet(a).map(x => x.trim());
+  const colVec = items => `matrix(${items.map(x => `[${x}]`).join(',')})`;
+  function hessianRows(f, vars) { return vars.map(a => vars.map(b => nd(`diff(diff(${f},${a}),${b})`).toString())); }
+  function pointPairs(arg) { // [x, y] = [1, 2]  ->  {x: '1', y: '2'}
+    const e = parseEq(arg);
+    if (!e) throw err(null, `expecting a point like [x, y] = [1, 2], got ${arg}`);
+    const vs = varsOf(e.lhs), ps = listOrSet(e.rhs).map(tr);
+    return { vars: vs, pt: Object.fromEntries(vs.map((v, i) => [v, ps[i]])) };
+  }
+  const at = (expr, pt) => nd(`simplify(${nd(expr, Object.fromEntries(Object.entries(pt).map(([k, v]) => [k, `(${v})`]))).toString()})`).toString();
+
+  const CALC2 = {
+    // VectorCalculus / Student[MultivariateCalculus]
+    Gradient(args) {
+      if (/=/.test(args[1] || '')) { const { vars, pt } = pointPairs(args[1]); const f = tr(args[0]); return R(colVec(vars.map(v => at(nd(`diff(${f},${v})`).toString(), pt)))); }
+      const f = tr(args[0]), vars = varsOf(args[1]);
+      return R(colVec(vars.map(v => nd(`diff(${f},${v})`).toString())));
+    },
+    Hessian(args) {
+      const f = tr(args[0]);
+      if (/=/.test(args[1] || '')) { const { vars, pt } = pointPairs(args[1]); return R(`matrix(${hessianRows(f, vars).map(r => '[' + r.map(x => at(x, pt)).join(',') + ']').join(',')})`); }
+      const vars = varsOf(args[1]);
+      return R(`matrix(${hessianRows(f, vars).map(r => '[' + r.join(',') + ']').join(',')})`);
+    },
+    Jacobian(args) {
+      const fs = toList(tr(args[0])), vars = varsOf(args[1]);
+      return R(`matrix(${fs.map(f => '[' + vars.map(v => nd(`diff(${f},${v})`).toString()).join(',') + ']').join(',')})`);
+    },
+    Laplacian(args) { const f = tr(args[0]); return R(nd(varsOf(args[1]).map(v => `diff(${f},${v},2)`).join('+')).toString()); },
+    Divergence(args) { const F = toList(tr(args[0])), vars = varsOf(args[1]); return R(nd(F.map((c, i) => `diff(${c},${vars[i]})`).join('+')).toString()); },
+    Curl(args) {
+      const [P, Q, Rz] = toList(tr(args[0])), [x, y, z] = varsOf(args[1]);
+      const d = (f, v) => `diff(${f},${v})`;
+      return R(colVec([`${d(Rz, y)}-${d(Q, z)}`, `${d(P, z)}-${d(Rz, x)}`, `${d(Q, x)}-${d(P, y)}`].map(e => nd(e).toString())));
+    },
+    DirectionalDiff(args) { // VectorCalculus: DirectionalDiff(f, [x, y], [a, b]) — usa o vetor unitário
+      const f = tr(args[0]), vars = varsOf(args[1]), u = toList(tr(args[2]));
+      const norm = `sqrt(${u.map(c => `(${c})^2`).join('+')})`;
+      return R(nd(`simplify((${vars.map((v, i) => `diff(${f},${v})*(${u[i]})`).join('+')})/(${norm}))`).toString());
+    },
+    DirectionalDerivative(args) { // Student: DirectionalDerivative(f, [x, y] = [a, b], [u1, u2])
+      const f = tr(args[0]);
+      const { vars, pt } = pointPairs(args[1]);
+      const u = toList(tr(args[2]));
+      const norm = `sqrt(${u.map(c => `(${c})^2`).join('+')})`;
+      const dd = nd(`(${vars.map((v, i) => `(${nd(`diff(${f},${v})`).toString()})*(${u[i]})`).join('+')})/(${norm})`).toString();
+      return R(at(dd, pt));
+    },
+    TangentPlane(args) { // Student: TangentPlane(f, [x, y] = [a, b]) — devolve a expressão do plano
+      const f = tr(args[0]);
+      const { vars, pt } = pointPairs(args[1]);
+      const plane = `${at(f, pt)}+${vars.map(v => `(${at(nd(`diff(${f},${v})`).toString(), pt)})*(${v}-(${pt[v]}))`).join('+')}`;
+      return R(nd(`expand(${plane})`).toString());
+    },
+    SecondDerivativeTest(args) {
+      const f = tr(args[0]);
+      const e = parseEq(args[1]);
+      const vars = varsOf(e.lhs);
+      const pts = listOrSet(e.rhs).map(p => listOrSet(p).map(tr));
+      const H = hessianRows(f, vars);
+      const groups = { LocalMin: [], LocalMax: [], Saddle: [], Inconclusive: [] };
+      for (const p of pts) {
+        const pt = Object.fromEntries(vars.map((v, i) => [v, p[i]]));
+        const Hp = H.map(r => r.map(x => N(at(x, pt))));
+        const det = vars.length === 2 ? Hp[0][0] * Hp[1][1] - Hp[0][1] * Hp[1][0] : null;
+        const label = vars.length !== 2 ? 'Inconclusive' : det > 1e-12 ? (Hp[0][0] > 0 ? 'LocalMin' : 'LocalMax') : det < -1e-12 ? 'Saddle' : 'Inconclusive';
+        groups[label].push(`[${p.join(', ')}]`);
+      }
+      const t = Object.entries(groups).map(([k, v]) => `\\mathit{${k}} = \\left[${v.map(s => tex(nd(s).toString())).join(',\\,')}\\right]`).join(',\\quad ');
+      return { value: '[]', tex: t };
+    },
+    LagrangeMultipliers(args) { // Student: LagrangeMultipliers(f, [g1, ...], [x, y])
+      const f = tr(args[0]), gs = listOrSet(args[1]).map(eqToExpr), vars = varsOf(args[2]);
+      const lams = gs.map((_, i) => `lambdavar${i + 1}`);
+      const eqs = vars.map(v => `diff(${f},${v})-(${gs.map((g, i) => `${lams[i]}*diff(${g},${v})`).join('+')})`).map(e => nd(e).toString()).concat(gs);
+      const all = vars.concat(lams);
+      const sols = dedupeSols(solveSys(eqs, all) || [], all, eqs).filter(s => vars.every(v => !/\bi\b/.test(nd(s[v]).toString())));
+      const pts = sols.map(s => `[${vars.map(v => s[v]).join(', ')}]`);
+      return { value: `[${pts.join(',')}]`, tex: `\\left[${pts.map(p => tex(nd(p).toString())).join(',\\; ')}\\right]` };
+    },
+    CriticalPoints(args) {
+      const f = tr(args[0]), vars = varsOf(args[1]);
+      const eqs = vars.map(v => nd(`diff(${f},${v})`).toString());
+      const sols = dedupeSols(solveSys(eqs, vars) || [], vars, eqs).filter(sl => vars.every(v => !/\bi\b/.test(nd(sl[v]).toString())));
+      return seqR(sols.map(s => ({ value: `[${vars.map(v => `${v}=${s[v]}`).join(',')}]`, tex: `\\left\\{${vars.map(v => `${v} = ${tex(s[v])}`).join(',\\, ')}\\right\\}` })));
+    },
+    MultiInt(args) { // Student: MultiInt(f, x = a .. b, y = c .. d) — a primeira faixa é a mais interna
+      let body = args[0];
+      for (const r of args.slice(1).filter(a => /\.\./.test(a))) body = `int(${body}, ${r})`;
+      return evalExpr(body);
+    },
+    TaylorApproximation(args) { return CALC2.mtaylor([args[0], args[1].replace(/^\s*\[([^\]]*)\]\s*=\s*\[([^\]]*)\]\s*$/, (m, a, b) => '[' + a.split(',').map((v, i) => `${v.trim()} = ${b.split(',')[i].trim()}`).join(', ') + ']'), args[2] !== undefined ? String(N(tr(args[2])) + 1) : '3']); },
+    mtaylor(args) { // mtaylor(f, [x = a, y = b], n): termos de grau total < n
+      const f = tr(args[0]);
+      const pts = listOrSet(args[1]).map(p => { const e = parseEq(p); return e ? [e.lhs.trim(), tr(e.rhs)] : [p.trim(), '0']; });
+      const n = args[2] !== undefined ? N(tr(args[2])) : 6;
+      const sub = Object.fromEntries(pts.map(([v, a]) => [v, `(${a})+tmtvar*((${v})-(${a}))`]));
+      let g = nd(f, sub).toString(), fact = 1; const terms = [];
+      for (let k = 0; k < n; k++) {
+        if (k > 0) fact *= k;
+        const c = nd(`simplify(${nd(g, { tmtvar: '0' }).toString()})`).toString();
+        if (c !== '0') terms.push(`(${c})/${fact}`);
+        g = nd(`diff(${g},tmtvar)`).toString();
+      }
+      return R(nd(`expand(${terms.join('+') || '0'})`).toString());
+    },
+    VectorField(args) { return R(tr(args[0])); },
+    SetCoordinates() { return { none: true }; },
+    Zeta(args) { const p = N(tr(args[0])); const Z = { 2: 'pi^2/6', 4: 'pi^4/90', 6: 'pi^6/945' }; return Z[p] ? R(nd(Z[p]).toString()) : { value: `Zeta(${p})`, tex: `\\zeta\\left(${p}\\right)` }; },
+    combine(args) { return R(trigSimplify(nd(tr(args[0])).toString())); },
+  };
+
   /* ======================= Instruções ======================= */
 
   // substitui %, %%, %%% pelo histórico
@@ -2029,8 +2558,11 @@ function MapleKernelFactory(global) {
     return ctx.blocks.map(b => (b.note ? { note: b.note.replace(/iI/g, 'i') } : b));
   }
 
-  Object.assign(CMD, PLOTS, FLOW);
-  global.MapleKernel = { evaluateCell, reset, state };
+  Object.assign(CMD, PLOTS, FLOW, CALC2);
+  // pacote linalg (antigo, ainda muito usado em cursos)
+  Object.assign(CMD, { grad: CALC2.Gradient, hessian: CALC2.Hessian, jacobian: CALC2.Jacobian, laplacian: CALC2.Laplacian, diverge: CALC2.Divergence, curl: CALC2.Curl,
+    det: a => CMD.Determinant(a), inverse: a => CMD.MatrixInverse(a), transpose: a => CMD.Transpose(a) });
+  global.MapleKernel = { evaluateCell, reset, state, _internals: { solveSys, dedupeSols, factorList, infiniteSum } };
   if (typeof module !== 'undefined') module.exports = global.MapleKernel;
 }
 MapleKernelFactory(typeof window !== 'undefined' ? window : globalThis);

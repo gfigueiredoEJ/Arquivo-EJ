@@ -20,6 +20,20 @@ const HELP = `Comandos (sintaxe do Maple). Termine com ; para ver o resultado ou
                animate(plot, [sin(k*x), x = 0 .. 2*Pi], k = 1 .. 3);   contourplot  densityplot  fieldplot  spacecurve  textplot  logplot  inequal
   Programação: for i from 1 to 5 do i^2 end do;   while k < 10 do k := k + 1 end do;   if x > 0 then 1 else -1 end if;
                F := proc(n) local r; r := n^2; return r end proc;   printf("%d\\n", 42);   seq(i^2, i = 1 .. 5);   add(k, k = 1 .. 100);
+  CÁLCULO 2 ─────────────────────────────────────────────────────────────
+  Parciais:    f := (x, y) -> x^3 + y^3 - 3*x*y;   diff(f(x, y), x);   diff(f(x, y), y$2);   diff(f(x, y), x, y);   D[1](f)(1, 2);
+  Ponto crít.: solve({diff(f(x, y), x) = 0, diff(f(x, y), y) = 0}, {x, y});
+  Hessiana:    with(VectorCalculus):  H := Hessian(f(x, y), [x, y]);   with(LinearAlgebra): Determinant(H);   eval(%, {x = 1, y = 1});
+  Gradiente:   Gradient(f(x, y), [x, y]);   DirectionalDiff(x^2*y, [x, y], [3, 4]);   Jacobian([r*cos(t), r*sin(t)], [r, t]);
+  Student:     with(Student[MultivariateCalculus]):  TangentPlane(f(x, y), [x, y] = [1, 2]);   SecondDerivativeTest(f(x, y), [x, y] = [[0, 0], [1, 1]]);
+               LagrangeMultipliers(x*y, [x^2 + y^2 - 1], [x, y]);   DirectionalDerivative(f(x, y), [x, y] = [1, 2], [3, 4]);   MultiInt(x*y, x = 0 .. 1, y = 0 .. 2);
+  Lagrange:    L := f(x, y) - lambda*(x^2 + y^2 - 1);   solve({diff(L, x) = 0, diff(L, y) = 0, x^2 + y^2 = 1}, {x, y, lambda});
+  Int. dupla:  int(int(x*y, y = 0 .. x), x = 0 .. 1);   int(x*y^2, [x = 0 .. 1, y = 0 .. 2]);   Int(Int(x*y, y = 0 .. 1), x = 0 .. 2);  value(%);
+  Polares:     int(int(r^2*r, r = 0 .. 1), theta = 0 .. 2*Pi);   Tripla: int(int(int(x*y*z, x = 0 .. 1), y = 0 .. 1), z = 0 .. 1);
+  Numérico:    evalf(Int(Int(exp(x*y), x = 0 .. 1), y = 0 .. 1));
+  Séries:      sum(1/n^2, n = 1 .. infinity);   sum(1/(n*(n + 1)), n = 1 .. infinity);   sum(k^2, k = 1 .. n);   limit(a(n + 1)/a(n), n = infinity);
+  Taylor 2 v.: mtaylor(exp(x)*cos(y), [x = 0, y = 0], 3);
+  Gráficos:    plot3d(x^2 - y^2, x = -2 .. 2, y = -2 .. 2);   contourplot(x^2 + y^2, x = -2 .. 2, y = -2 .. 2);   plot3d(1, t = 0 .. 2*Pi, p = 0 .. Pi, coords = spherical);
   Histórico:   %  (último resultado)   %%   %%%
 Atalhos: Enter executa · Shift+Enter nova linha · Ctrl+J novo prompt abaixo · Ctrl+K acima · Ctrl+T texto · Ctrl+Delete apaga o grupo · ■ Interromper para cálculos longos`;
 
