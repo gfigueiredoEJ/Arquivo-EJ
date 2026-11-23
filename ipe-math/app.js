@@ -157,7 +157,10 @@ const Engine = (() => {
   const pending = new Map();
   const local = (op, text) => Promise.resolve(op === 'reset' ? (MapleKernel.reset(), []) : MapleKernel.evaluateCell(text));
   function spawn() {
-    const src = `importScripts(${JSON.stringify(NERDAMER_URL)});\n${MapleKernelFactory.toString()}\nMapleKernelFactory(self);\n` +
+    // versão em arquivo único (offline): o motor vem embutido na própria página
+    const inline = document.getElementById('nerdamer-src');
+    const head = inline ? inline.textContent : `importScripts(${JSON.stringify(NERDAMER_URL)});`;
+    const src = `${head}\n${MapleKernelFactory.toString()}\nMapleKernelFactory(self);\n` +
       `self.onmessage = e => { const { id, op, text } = e.data; let blocks = [];` +
       ` try { if (op === 'reset') MapleKernel.reset(); else if (op !== 'ping') blocks = MapleKernel.evaluateCell(text); }` +
       ` catch (err) { blocks = [{ error: 'Error, ' + (err && err.message || err) }]; } self.postMessage({ id, blocks }); };`;
