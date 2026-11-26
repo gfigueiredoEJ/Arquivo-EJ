@@ -57,4 +57,13 @@ pontuacao:
   avaliacoes_minimas: 100                 # PREENCHER
   nota_minima: 4.2
 
-max_resultados_por_busca: 20              # cada busca custa uma chamada à Places API
+max_resultados_por_busca: 20
+
+# Base local com os dados abertos de CNPJ (python -m leadfinder base atualizar).
+base_receita: dados/receita.sqlite
+
+# CNAEs de cada setor, usados para descobrir empresas na Receita e desempatar o cruzamento.
+cnaes_por_setor:                          # PREENCHER junto com "setores"
+  clínica odontológica: ["8630504"]       # atividade odontológica
+  clínica médica: ["8630501", "8630502", "8630503"]   # ambulatorial com cirurgia / exames / consultas
+  escritório de advocacia: ["6911701"]    # serviços advocatícios              # cada busca custa uma chamada à Places API

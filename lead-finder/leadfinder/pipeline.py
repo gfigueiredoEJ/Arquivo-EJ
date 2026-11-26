@@ -6,11 +6,13 @@ import datetime as dt
 import io
 import re
 from collections import Counter
+from pathlib import Path
 from urllib.parse import quote_plus
 
 from . import cnpj as receita
 from . import places
-from .scoring import normalizar, pontuar
+from . import receita_base
+from .scoring import normalizar, pontuar, tokens_nome
 from .site import LeitorSite, dominio
 
 NF = "não encontrado"
@@ -50,7 +52,8 @@ def links_consulta_manual(lead: dict) -> dict:
 
 def sugerir_abordagem(lead: dict, servico: str) -> str:
     nome = lead.get("empresa") or lead.get("nome_fantasia") or "a empresa"
-    unidades = max(lead.get("unidades_site") or 0, lead.get("unidades_maps") or 0)
+    unidades = max(lead.get("unidades_site") or 0, lead.get("unidades_maps") or 0,
+                   lead.get("unidades_receita") or 0)
     if unidades > 1:
         return (
             f"Com {unidades} unidades, manter o mesmo padrão em todas é o desafio; "
@@ -78,13 +81,8 @@ def sugerir_abordagem(lead: dict, servico: str) -> str:
 
 
 def _nomes_batem(lead: dict) -> bool:
-    # Palavras de tipo societário ou de setor não identificam a empresa.
-    ignorar = {"ltda", "me", "epp", "eireli", "sa", "s/a", "de", "da", "do", "das", "dos", "e",
-               "&", "advogados", "advocacia", "associados", "sociedade", "clinica", "clinicas",
-               "odontologia", "odontologica", "odonto", "medica", "medicina", "centro",
-               "consultorio", "servicos", "comercio", "grupo", "rede", "rio", "janeiro"}
-    a = set(normalizar(lead.get("empresa")).split()) - ignorar
-    b = set(normalizar(f"{lead.get('razao_social')} {lead.get('nome_fantasia')}").split()) - ignorar
+    a = tokens_nome(lead.get("empresa"))
+    b = tokens_nome(f"{lead.get('razao_social')} {lead.get('nome_fantasia')}")
     return not a or bool(a & b)
 
 
@@ -120,7 +118,7 @@ def ler_csv(caminho: str) -> list[dict]:
 
 def candidatos_csv(caminho: str) -> list[dict]:
     linhas = ler_csv(caminho)
-    numericos = {"nota": float, "avaliacoes": int, "unidades_maps": int}
+    numericos = {"nota": float, "avaliacoes": int, "unidades_maps": int, "unidades_receita": int}
     for linha in linhas:
         for campo, tipo in numericos.items():
             valor = (linha.get(campo) or "").replace(",", ".").strip()
@@ -128,7 +126,29 @@ def candidatos_csv(caminho: str) -> list[dict]:
     return linhas
 
 
-def enriquecer(candidato: dict, cfg: dict, http, leitor: LeitorSite, hoje: dt.date) -> dict:
+def _cnaes_do_setor(cfg: dict, setor: str | None) -> list[str]:
+    por_setor = cfg.get("cnaes_por_setor") or {}
+    if setor in por_setor:
+        return por_setor[setor]
+    return sorted({c for lista in por_setor.values() for c in lista})
+
+
+def completar_com_maps(candidato: dict, chave: str, http) -> dict:
+    """Para empresas vindas da Receita: busca site, telefone e avaliações no Google Maps."""
+    achados = places.buscar(f"{candidato['empresa']} {candidato['endereco']}", chave, http, maximo=3)
+    for lugar in achados:
+        mesmo_nome = tokens_nome(lugar["empresa"]) & tokens_nome(candidato["empresa"])
+        mesmo_cep = receita_base.extrair_endereco(lugar["endereco"])[0] == \
+            receita_base.extrair_endereco(candidato["endereco"])[0]
+        if mesmo_nome and mesmo_cep:
+            for campo in ("place_id", "site", "telefone", "nota", "avaliacoes"):
+                candidato[campo] = lugar[campo]
+            break
+    return candidato
+
+
+def enriquecer(candidato: dict, cfg: dict, http, leitor: LeitorSite, hoje: dt.date,
+               base=None) -> dict:
     data = hoje.strftime("%d/%m/%Y")
     lead = {campo: None for campo in CAMPOS_MANUAIS}
     lead.update(candidato)
@@ -152,16 +172,33 @@ def enriquecer(candidato: dict, cfg: dict, http, leitor: LeitorSite, hoje: dt.da
     numero = receita.somente_digitos(candidato.get("cnpj") or "")
     if not numero and lead.get("cnpjs_site"):
         numero = lead["cnpjs_site"][0]
+    if not numero and base is not None:
+        achado = receita_base.casar(base, candidato.get("empresa") or "", candidato.get("endereco") or "",
+                                    _cnaes_do_setor(cfg, candidato.get("setor_busca")))
+        if achado["cnpj"]:
+            numero = achado["cnpj"]
+            lead["cnpj_origem"] = f"cruzamento com a base da Receita, confiança {achado['confianca']}"
+            if achado["confianca"] != "alta":
+                pendencias.append(f"CNPJ por cruzamento com confiança média ({achado['motivo']}): conferir")
+        else:
+            pendencias.append(f"cruzamento com a Receita: {achado['motivo']}")
     lead["excluido"] = None
     if numero:
-        try:
-            dados = receita.buscar_cnpj(numero, http)
-        except RuntimeError as erro:
-            dados = None
-            pendencias.append(f"{erro}: rodar de novo mais tarde")
-        if dados:
-            lead.update(receita.interpretar(dados, hoje))
-            fontes.append(f"Receita Federal (dados abertos via BrasilAPI), {data}")
+        local = receita_base.interpretar_local(base, numero, hoje) if base is not None else None
+        dados = None
+        if local is None:
+            try:
+                dados = receita.buscar_cnpj(numero, http)
+            except RuntimeError as erro:
+                pendencias.append(f"{erro}: rodar de novo mais tarde")
+        if local or dados:
+            if local:
+                lead.update(local)
+                fontes.append(f"Receita Federal (dados abertos, competência "
+                              f"{receita_base.competencia(base)}), {data}")
+            else:
+                lead.update(receita.interpretar(dados, hoje))
+                fontes.append(f"Receita Federal (dados abertos via BrasilAPI), {data}")
             lead["excluido"] = receita.motivo_exclusao(lead, cfg["filtros"])
             alerta = receita.alerta_porte(lead)
             if alerta and not lead["excluido"]:
@@ -176,7 +213,7 @@ def enriquecer(candidato: dict, cfg: dict, http, leitor: LeitorSite, hoje: dt.da
                     "conferir se é filial ou outra empresa")
         elif not pendencias or "BrasilAPI" not in pendencias[-1]:
             pendencias.append("CNPJ não encontrado na Receita")
-    else:
+    elif base is None:
         pendencias.append("CNPJ não encontrado (procurar no rodapé do site ou em notas fiscais públicas)")
 
     for campo in ("cnpj", "razao_social", "decisor", "cargo", "porte", "data_abertura"):
@@ -199,15 +236,31 @@ def calcular(lead: dict, cfg: dict) -> dict:
     return lead
 
 
+def abrir_base(cfg: dict):
+    caminho = cfg.get("base_receita")
+    if caminho and Path(caminho).exists():
+        return receita_base.conectar(caminho)
+    return None
+
+
 def coletar(cfg: dict, http, chave: str | None = None, entrada: str | None = None,
-            limite: int | None = None, hoje: dt.date | None = None, log=print) -> list[dict]:
+            limite: int | None = None, hoje: dt.date | None = None, log=print,
+            fonte: str = "maps", base=None) -> list[dict]:
     hoje = hoje or dt.date.today()
+    base = base if base is not None else abrir_base(cfg)
     if entrada:
         candidatos = candidatos_csv(entrada)
+    elif fonte == "receita":
+        if base is None:
+            raise ValueError("Base da Receita não encontrada: rode 'python -m leadfinder base atualizar'.")
+        candidatos = receita_base.descobrir(base, cfg, hoje, limite or 200)
+        if chave:
+            for c in candidatos:
+                completar_com_maps(c, chave, http)
     elif chave:
         candidatos = candidatos_places(cfg, chave, http, log)
     else:
-        raise ValueError("Informe GOOGLE_MAPS_API_KEY ou um arquivo de entrada (--entrada).")
+        raise ValueError("Informe GOOGLE_MAPS_API_KEY, --fonte receita ou --entrada.")
     if limite:
         candidatos = candidatos[:limite]
 
@@ -215,7 +268,7 @@ def coletar(cfg: dict, http, chave: str | None = None, entrada: str | None = Non
     leads, raizes = [], set()
     for i, c in enumerate(candidatos, 1):
         log(f"[{i}/{len(candidatos)}] {c.get('empresa')}")
-        lead = calcular(enriquecer(c, cfg, http, leitor, hoje), cfg)
+        lead = calcular(enriquecer(c, cfg, http, leitor, hoje, base), cfg)
         raiz = receita.somente_digitos(lead["cnpj"])[:8]
         if raiz and raiz in raizes:
             continue  # outra unidade de uma empresa já listada

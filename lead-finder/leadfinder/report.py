@@ -24,7 +24,7 @@ CAMPOS_COMPLETOS = [
     "cnae", "cnae_descricao", "porte", "capital_social", "data_abertura", "anos_cnpj",
     "situacao", "setor_busca", "endereco", "bairro", "bairro_receita", "municipio",
     "municipio_maps", "cep_receita", "telefone", "email_corporativo", "site", "nota", "avaliacoes",
-    "unidades_maps", "unidades_site", "pixel_meta", "tag_google_ads", "ferramentas_pagas",
+    "unidades_maps", "unidades_site", "unidades_receita", "cnpj_origem", "pixel_meta", "tag_google_ads", "ferramentas_pagas",
     "pagina_vagas", "vagas_gestao_site", "decisor", "cargo", *CAMPOS_MANUAIS,
     "sinais", "pendencias", "pendencias_manuais", "abordagem", "fontes",
     "link_meta_ads", "link_google_ads", "link_linkedin", "place_id", "cnpjs_site",
@@ -123,7 +123,7 @@ def _planilha(ws, cabecalho, linhas):
 def carregar_csv(caminho: str) -> list[dict]:
     """Lê o CSV completo (já com colunas manuais preenchidas) de volta para dicts."""
     numeros = {"pontuacao", "capital_social", "anos_cnpj", "nota", "avaliacoes",
-               "unidades_maps", "unidades_site", "anuncios_meses"}
+               "unidades_maps", "unidades_site", "unidades_receita", "cnpj_origem", "anuncios_meses"}
     booleanos = {"pixel_meta", "tag_google_ads", "pagina_vagas", "vagas_gestao_site",
                  "vagas_gestao", "expansao_recente"}
     leads = []

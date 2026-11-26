@@ -20,6 +20,20 @@ def normalizar(texto: str) -> str:
     return sem_acento.lower().strip()
 
 
+# Palavras de tipo societário ou de setor não identificam a empresa.
+GENERICOS = {
+    "ltda", "me", "epp", "eireli", "sa", "s/a", "de", "da", "do", "das", "dos", "e", "em",
+    "advogados", "advocacia", "advogado", "associados", "sociedade", "clinica", "clinicas",
+    "odontologia", "odontologica", "odontologico", "odonto", "medica", "medico", "medicina",
+    "centro", "consultorio", "servicos", "comercio", "grupo", "rede", "rio", "janeiro", "rj",
+    "unidade", "filial", "the", "and", "law", "dr", "dra", "saude", "instituto",
+}
+
+
+def tokens_nome(texto: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", normalizar(texto)) if len(t) > 1} - GENERICOS
+
+
 def em_regiao_prioritaria(lead: dict, regioes: list[str]) -> str | None:
     """Compara o bairro (ou município) inteiro, para que "Tijuca" não case com
     "Barra da Tijuca" nem "Centro" com "Centro Empresarial"."""
@@ -64,7 +78,8 @@ def pontuar(lead: dict, cfg: dict) -> tuple[int, str, list[str], list[str]]:
     elif meses > 0:
         sinais.append(f"anúncios ativos há {meses:g} meses (menos de 3, sem pontos)")
 
-    unidades = max(lead.get("unidades_site") or 0, lead.get("unidades_maps") or 0)
+    unidades = max(lead.get("unidades_site") or 0, lead.get("unidades_maps") or 0,
+                   lead.get("unidades_receita") or 0)
     if unidades > 1 or lead.get("expansao_recente"):
         pontos += PONTOS["unidades"]
         sinais.append(f"{unidades} unidades (+20)" if unidades > 1 else "expansão recente (+20)")

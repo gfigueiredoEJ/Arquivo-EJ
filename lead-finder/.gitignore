@@ -2,3 +2,5 @@ saida/
 __pycache__/
 .pytest_cache/
 *.pyc
+dados/
+*.log

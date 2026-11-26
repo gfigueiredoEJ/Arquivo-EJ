@@ -21,6 +21,18 @@ Rode a partir de `lead-finder/`:
 pip install -r requirements.txt
 ```
 
+Primeiro confira a base local da Receita (`python -m leadfinder base info`). Se não existir
+ou tiver mais de 2 meses, rode `python -m leadfinder base atualizar` (baixa ~8 GB dos dados
+abertos oficiais, importa só a Região Metropolitana do Rio sem MEIs e apaga os .zip; leva
+de 30 a 60 minutos). Com a base, o CNPJ é achado pelo CEP + número + nome do Google Maps e
+os dados da empresa vêm dela, sem depender da BrasilAPI.
+
+Descobrir empresas direto na Receita (por CNAE do `cnaes_por_setor` e bairro), sem chave:
+```bash
+python -m leadfinder buscar --fonte receita --limite 50
+```
+Com a chave do Google Places na mesma busca, o script completa site, telefone e avaliações.
+
 Com a chave da API oficial do Google Places:
 ```bash
 GOOGLE_MAPS_API_KEY=... python -m leadfinder buscar --config config.yaml --limite 30
@@ -41,8 +53,13 @@ O script:
 - pontua de 0 a 100 e gera `saida/leads.md`, `saida/leads.xlsx` e `saida/leads_completo.csv`.
 
 ## Etapa 2a: achar o CNPJ que faltou
-A maioria dos sites de PME não publica o CNPJ (no teste real, 0 de 5). Para leads B ou
-melhores com "CNPJ não encontrado":
+A maioria dos sites de PME não publica o CNPJ (no teste real, 0 de 5). Com a base da
+Receita, o cruzamento resolve a maior parte. Ele só aceita quando endereço e nome apontam
+para um único estabelecimento:
+- confiança **alta**: CEP, número e nome batem;
+- confiança **média**: único CNPJ no endereço ou nome único na região. Peça conferência.
+Se o cruzamento recusar (ex.: prédio comercial com vários CNPJs e nome genérico), ou se a
+base não existir, para leads B ou melhores:
 1. Pesquise na web `"<nome>" CNPJ <bairro>` e `"<endereço com número>" CNPJ`. Sites de
    consulta pública (cnpja, MonitorCNPJ, EmpresAqui) servem só para achar candidatos.
 2. Cuidado com homônimos: no teste, "BCW Advogados" e "LP Law" deram em escritórios de
