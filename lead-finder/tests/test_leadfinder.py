@@ -282,9 +282,12 @@ def test_brasilapi_429_tenta_de_novo():
 # --- Regressões do teste com empresas reais ---
 
 def test_nome_generico_nao_confirma_cnpj():
-    lead = {"empresa": "BCW Advogados", "razao_social": "BALDISSERA CONTE E WEISS ADVOGADOS ASSOCIADOS",
+    # Só palavras genéricas em comum ("advogados") não confirmam.
+    lead = {"empresa": "Silva Advogados", "razao_social": "BALDISSERA CONTE E WEISS ADVOGADOS ASSOCIADOS",
             "nome_fantasia": ""}
     assert not pipeline._nomes_batem(lead)
+    # "BCW" é sigla legítima de Baldissera Conte Weiss: quem barra o homônimo de SC
+    # é o filtro de município (test_municipio_fora_da_regiao_metropolitana_exclui).
     lead = {"empresa": "Sorriso Carioca", "razao_social": "CLINICA SORRISO CARIOCA LTDA"}
     assert pipeline._nomes_batem(lead)
 
@@ -321,3 +324,11 @@ def test_cep_diferente_do_maps_gera_alerta(tmp_path):
     rotas = {cnpj.BRASILAPI_URL.format(cnpj=CNPJ_TESTE): Resp(text=json.dumps({**RECEITA, "cep": "22640100"}))}
     lead = pipeline.coletar(CFG, FakeHttp(rotas), entrada=str(entrada), hoje=HOJE, log=lambda *_: None)[0]
     assert not any("CEP" in p for p in lead["pendencias"])
+
+
+def test_nome_por_sigla_confirma_cnpj():
+    lead = {"empresa": "RNR Advocacia", "razao_social": "ROSEMARY N. ROSA SOCIEDADE INDIVIDUAL DE ADVOCACIA",
+            "nome_fantasia": ""}
+    assert pipeline._nomes_batem(lead)
+    lead = {"empresa": "BCW Advogados", "razao_social": "BRANDAO COUTO, WIGDEROWITZ E PESSOA ADVOGADOS"}
+    assert pipeline._nomes_batem(lead)

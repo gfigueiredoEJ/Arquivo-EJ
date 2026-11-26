@@ -29,6 +29,12 @@ EMPRESAS = [
     _linha("44555666", "JOAO MEI CLINICA", "2135", "50", "5000,00", "01", ""),
     _linha("55666777", "SORRISO CARIOCA SP LTDA", "2062", "49", "90000,00", "01", ""),
     _linha("66777888", "CLINICA NOVA LTDA", "2062", "49", "90000,00", "01", ""),
+    _linha("77000001", "LOPES PINTO CONSULTORIA E CORRETORA DE SEGUROS LTDA", "2062", "49", "10000,00", "01", ""),
+    _linha("77000002", "LOPES PINTO ADVOGADOS ASSOCIADOS", "2232", "49", "50000,00", "05", ""),
+    _linha("77000003", "ROSEMARY N. ROSA SOCIEDADE INDIVIDUAL DE ADVOCACIA", "2321", "49", "1000,00", "05", ""),
+    _linha("77000004", "LOUREIRO E BRUM SOCIEDADE DE ADVOGADOS", "2232", "49", "1000,00", "05", ""),
+    _linha("77000005", "FACIES CLINICA ODONTO-MEDICA LTDA", "2062", "49", "100000,00", "05", ""),
+    _linha("77000006", "FACIES SERVICOS MEDICOS LTDA", "2062", "49", "10000,00", "01", ""),
 ]
 ESTABS = [
     # Sorriso Carioca: matriz + filial, Barra da Tijuca
@@ -53,6 +59,18 @@ ESTABS = [
     # Aberta há menos de 2 anos
     estab("66777888", "0002", "21", "CLINICA NOVISSIMA", "8630504", "ATLANTICA", "20",
           "COPACABANA", "22010000", inicio="20260101", matriz="2"),
+    # Mesmo prédio: corretora "LP" e o escritório Lopes Pinto
+    estab("77000001", "0001", "01", "LP CORRETORA DE SEGUROS", "6622300", "MEXICO", "11",
+          "CENTRO", "20031903"),
+    estab("77000002", "0001", "02", "", "6911701", "MEXICO", "11", "CENTRO", "20031903"),
+    # Sigla: RNR = Rosemary N. Rosa
+    estab("77000003", "0001", "03", "", "6911701", "DO OUVIDOR", "21", "CENTRO", "20040040"),
+    estab("77000004", "0001", "04", "", "6911701", "DO OUVIDOR", "21", "CENTRO", "20040040"),
+    # Prédio com CEP próprio (22640-904) diferente do CEP da rua (22640-100)
+    estab("77000005", "0001", "05", "FACIES ODONTOLOGIA", "8630504", "DAS AMERICAS", "500",
+          "BARRA DA TIJUCA", "22640904"),
+    estab("77000006", "0001", "06", "", "8630502", "PROFESSOR GASTAO BAHIANA", "155",
+          "LAGOA", "22071030"),
 ]
 SOCIOS = [
     _linha("11222333", "2", "MARIA DA SILVA", "***123456**", "22", "20150310", "", "***000000**", "", "00", "5"),
@@ -177,3 +195,68 @@ def test_pipeline_fonte_receita(base):
     assert leads[0]["decisor"] == "Joao de Souza"
     # capital 10 + unidades 20 + região 10
     assert leads[0]["pontuacao"] == 40 and leads[0]["classe"] == "B"
+
+
+
+# --- Casos do teste com a base real (nov/2026) ---
+
+def test_casar_exige_atividade_do_setor(base):
+    end = "Rua México, 11 - Centro, Rio de Janeiro - RJ, 20031-903"
+    r = receita_base.casar(base, "LP Law", end, ["6911701"])
+    assert r["cnpj"] == "77000002000102"  # escritório, não a corretora "LP"
+    r = receita_base.casar(base, "Lopes Pinto Advogados Associados", end, ["6911701"])
+    assert r["cnpj"] == "77000002000102" and r["confianca"] == "alta"
+    r = receita_base.casar(base, "LP Seguros", end, ["6911701"])
+    assert r["cnpj"] is None and "atividade" in r["motivo"]
+
+
+def test_casar_por_sigla(base):
+    end = "Travessa do Ouvidor, 21 - Centro, Rio de Janeiro - RJ, 20040-040"
+    r = receita_base.casar(base, "RNR Advocacia", end, ["6911701"])
+    assert r["cnpj"] == "77000003000103"
+
+
+def test_casar_predio_com_cep_proprio(base):
+    end = "Av. das Américas, 500 - Barra da Tijuca, Rio de Janeiro - RJ, 22640-100"
+    r = receita_base.casar(base, "Facies Clínica Odonto-Médica", end, ["8630504"])
+    assert r["cnpj"] == "77000005000105"
+    # sem CEP, o número desempata entre os dois "Facies"
+    r = receita_base.casar(base, "Facies", "Av. das Américas, 500 - Barra da Tijuca", ["8630504"])
+    assert r["cnpj"] == "77000005000105"
+
+
+def test_mesmo_cep_numero_diferente_vira_confianca_media(base):
+    # Receita: Av. Rio Branco, 85 (20090-003). Diretório desatualizado: número 120.
+    end = "Av. Rio Branco, 120 - Centro, Rio de Janeiro - RJ, 20090-003"
+    r = receita_base.casar(base, "Silva e Souza Advogados", end, ["6911701"])
+    assert r["cnpj"] == "33444555000110" and r["confianca"] == "média"
+    assert "número diferente" in r["motivo"]
+
+
+def test_descobrir_exclui_sa_aberta_orgao_publico_e_redes_grandes(base):
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    base.backup(con)
+    con.row_factory = sqlite3.Row
+    con.execute("UPDATE empresa SET natureza = '2046' WHERE basico = '22333444'")  # S.A. aberta
+    nomes = [a["empresa"] for a in receita_base.descobrir(con, CFG, HOJE)]
+    assert "Odonto Barra" not in nomes and "Sorriso Carioca" in nomes
+    cfg = {**CFG, "filtros": {**CFG["filtros"], "unidades_maximas": 1}}
+    nomes = [a["empresa"] for a in receita_base.descobrir(con, cfg, HOJE)]
+    assert "Sorriso Carioca" not in nomes  # 2 unidades > máximo
+
+
+def test_descobrir_prefere_razao_quando_fantasia_e_nome_de_unidade(base):
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    base.backup(con)
+    con.row_factory = sqlite3.Row
+    con.execute("UPDATE estab SET fantasia = 'UNIDADE BARRA II' WHERE basico = '22333444'")
+    nomes = [a["empresa"] for a in receita_base.descobrir(con, CFG, HOJE)]
+    assert "Odonto Barra Servicos Ltda" in nomes
+
+
+def test_fonte_receita_nao_duplica(base):
+    from tests.test_leadfinder import FakeHttp
+    lead = pipeline.coletar(CFG, FakeHttp({}), fonte="receita", hoje=HOJE, log=lambda *_: None, base=base)[0]
+    assert sum("Receita Federal" in f for f in lead["fontes"]) == 1

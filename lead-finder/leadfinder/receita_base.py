@@ -20,7 +20,7 @@ import zipfile
 from pathlib import Path
 
 from .cnpj import formatar_cnpj, somente_digitos
-from .scoring import normalizar, tokens_nome
+from .scoring import GENERICOS, normalizar, tokens_nome
 
 PORTE = {"00": "não informado", "01": "ME", "03": "EPP", "05": "DEMAIS"}
 SITUACAO_ATIVA = "02"
@@ -229,67 +229,126 @@ def extrair_endereco(endereco: str) -> tuple[str, str]:
             numero.group(1).lstrip("0") if numero else "")
 
 
-def _similaridade(nome: str, candidato: sqlite3.Row) -> float | None:
+def _iniciais(texto: str) -> str:
+    """Iniciais das palavras não genéricas: "Rosemary N. Rosa Sociedade..." -> "rnr"."""
+    palavras = re.findall(r"[a-z]+", normalizar(texto))
+    return "".join(p[0] for p in palavras if p not in GENERICOS)
+
+
+def _similaridade(nome: str, cand) -> float | None:
+    """Fração das palavras distintivas do nome que aparecem no candidato (siglas valem)."""
     a = tokens_nome(nome)
     if not a:
         return None  # nome só com palavras genéricas ("Clínica Odontológica")
-    b = tokens_nome(f"{candidato['fantasia']} {candidato['razao'] or ''}")
-    return len(a & b) / len(a)
+    texto = f"{cand['fantasia']} {cand['razao'] or ''}"
+    b = tokens_nome(texto)
+    siglas = {_iniciais(cand["fantasia"] or ""), _iniciais(cand["razao"] or "")} - {""}
+    palavras = sum(1 for t in a if t in b)
+    por_sigla = sum(1 for t in a if t not in b and 2 <= len(t) <= 5
+                    and any(s.startswith(t) for s in siglas))
+    if palavras == 0 and por_sigla < len(a):
+        return 0.0  # sigla é evidência fraca: só vale se explicar o nome inteiro
+    return (palavras + por_sigla) / len(a)
+
+
+def _similaridade_total(nome: str, cand) -> float:
+    """Desempate: compara também as palavras genéricas ("odontologia", "advogados")."""
+    a = set(re.findall(r"[a-z0-9]{2,}", normalizar(nome)))
+    b = set(re.findall(r"[a-z0-9]{2,}", normalizar(f"{cand['fantasia']} {cand['razao'] or ''}")))
+    return len(a & b) / len(a) if a else 0.0
 
 
 def casar(con, empresa: str, endereco: str = "", cnaes: list[str] | None = None) -> dict:
     """Procura o CNPJ de uma empresa vista no Google Maps.
 
     Retorna {"cnpj", "confianca": "alta"|"média", "motivo"} ou {"cnpj": None, "motivo"}.
-    Só aceita quando o endereço e/ou o nome apontam para um único estabelecimento.
+    Só aceita um estabelecimento da atividade do setor (CNAE), sem empate, apontado
+    pelo endereço e/ou pelo nome. Na dúvida, não chuta.
     """
     cnaes = set(cnaes or [])
     cep, numero = extrair_endereco(endereco)
-    sql = """SELECT e.cnpj, e.fantasia, e.cnae, e.numero, e.bairro_norm, m.razao
+    sql = """SELECT e.cnpj, e.fantasia, e.cnae, e.numero, e.cep, m.razao
              FROM estab e LEFT JOIN empresa m USING(basico) WHERE """
 
-    def ordenar(candidatos):
-        pontuados = []
-        for c in candidatos:
+    def avaliar(cands):
+        saida = []
+        for c in cands:
             sim = _similaridade(empresa, c)
-            pontuados.append((sim if sim is not None else -1, c["cnae"] in cnaes, c))
-        pontuados.sort(key=lambda t: (t[0], t[1]), reverse=True)
-        return pontuados
+            saida.append({"sim": -1.0 if sim is None else sim, "total": _similaridade_total(empresa, c),
+                          "cnae_ok": not cnaes or c["cnae"] in cnaes, "c": c})
+        return saida
 
+    def escolher(avaliados, minimo):
+        ok = sorted((a for a in avaliados if a["cnae_ok"] and a["sim"] >= minimo),
+                    key=lambda a: (a["sim"], a["total"]), reverse=True)
+        if not ok:
+            return None, None
+        if len(ok) > 1 and (ok[0]["sim"], ok[0]["total"]) == (ok[1]["sim"], ok[1]["total"]):
+            return None, f"{len(ok)} candidatos empatados"
+        return ok[0]["c"], None
+
+    def outra_atividade(avaliados, minimo):
+        return [a["c"] for a in avaliados if not a["cnae_ok"] and a["sim"] >= minimo]
+
+    motivo_endereco = None
     if cep and numero:
         cands = con.execute(sql + "e.cep = ? AND e.numero = ?", (cep, numero)).fetchall()
         if cands:
-            ps = ordenar(cands)
-            melhor_sim, melhor_cnae, melhor = ps[0]
-            segundo = ps[1][0] if len(ps) > 1 else -1
-            if melhor_sim >= 0.5 and melhor_sim > segundo:
-                return {"cnpj": melhor["cnpj"], "confianca": "alta",
-                        "motivo": f"CEP, número e nome batem ({len(cands)} CNPJ(s) no endereço)"}
-            if len(cands) == 1 and (melhor_sim > 0 or (melhor_sim == -1 and melhor_cnae)):
-                return {"cnpj": melhor["cnpj"], "confianca": "média",
-                        "motivo": "único CNPJ ativo no endereço; nome só confirma em parte"}
-            return {"cnpj": None,
-                    "motivo": f"{len(cands)} CNPJ(s) no endereço, nenhum com nome compatível"}
+            av = avaliar(cands)
+            escolhido, empate = escolher(av, 0.5)
+            if escolhido:
+                return {"cnpj": escolhido["cnpj"], "confianca": "alta",
+                        "motivo": f"CEP, número, nome e atividade batem ({len(cands)} CNPJ(s) no endereço)"}
+            do_setor = [a for a in av if a["cnae_ok"]]
+            if len(do_setor) == 1 and do_setor[0]["sim"] != 0:
+                return {"cnpj": do_setor[0]["c"]["cnpj"], "confianca": "média",
+                        "motivo": "único CNPJ da atividade no endereço; nome não confirma"}
+            if empate:
+                motivo_endereco = f"{empate} no endereço"
+            elif outra_atividade(av, 0.5):
+                c = outra_atividade(av, 0.5)[0]
+                motivo_endereco = (f"nome parecido no endereço, mas outra atividade "
+                                   f"(CNAE {c['cnae']}: {c['fantasia'] or c['razao']})")
+            else:
+                motivo_endereco = f"{len(cands)} CNPJ(s) no endereço, nenhum com nome compatível"
 
-    if cep:
-        cands = con.execute(sql + "e.cep = ?", (cep,)).fetchall()
-        ps = ordenar(cands)
-        if ps and ps[0][0] >= 0.5 and (len(ps) == 1 or ps[0][0] > ps[1][0]):
-            return {"cnpj": ps[0][2]["cnpj"], "confianca": "média",
-                    "motivo": "CEP e nome batem (sem número no endereço)"}
+    if cep and not numero:
+        av = avaliar(con.execute(sql + "e.cep = ?", (cep,)).fetchall())
+        escolhido, _ = escolher(av, 0.5)
+        if escolhido:
+            return {"cnpj": escolhido["cnpj"], "confianca": "média",
+                    "motivo": "CEP, nome e atividade batem (sem número no endereço)"}
 
+    # Pelo nome. Prédios grandes têm CEP próprio na Receita, diferente do CEP da rua.
     termos = " ".join(f'"{t}"' for t in sorted(tokens_nome(empresa)))
     if termos:
-        cands = con.execute(
-            sql + "e.cnpj IN (SELECT cnpj FROM nomes WHERE nomes MATCH ? LIMIT 50)", (termos,)
-        ).fetchall()
-        ps = [p for p in ordenar(cands) if p[0] >= 0.99]
-        if len(ps) == 1 and (not cnaes or ps[0][1]):
-            return {"cnpj": ps[0][2]["cnpj"], "confianca": "média",
-                    "motivo": "nome único na Região Metropolitana (endereço não confirmado)"}
-        if len(ps) > 1:
-            return {"cnpj": None, "motivo": f"{len(ps)} empresas com esse nome; falta endereço para escolher"}
-    return {"cnpj": None, "motivo": "nenhum estabelecimento compatível na base da Receita"}
+        av = avaliar(con.execute(
+            sql + "e.cnpj IN (SELECT cnpj FROM nomes WHERE nomes MATCH ? LIMIT 200)", (termos,)
+        ).fetchall())
+        if numero:
+            mesmo_lugar = [a for a in av if a["c"]["numero"] == numero
+                           and (not cep or a["c"]["cep"][:5] == cep[:5])]
+            escolhido, _ = escolher(mesmo_lugar, 0.99)
+            if escolhido:
+                return {"cnpj": escolhido["cnpj"], "confianca": "alta" if cep else "média",
+                        "motivo": "nome, atividade e número batem"
+                                  + (" (CEP próprio do prédio)" if cep else " (sem CEP no endereço)")}
+            if cep:
+                mesmo_cep = [a for a in av if a["c"]["cep"] == cep]
+                escolhido, _ = escolher(mesmo_cep, 0.99)
+                if escolhido:
+                    return {"cnpj": escolhido["cnpj"], "confianca": "média",
+                            "motivo": f"nome, atividade e CEP batem, mas número diferente "
+                                      f"(Receita: {escolhido['numero']}); endereço pode ter mudado"}
+        if not cep and not numero:
+            escolhido, empate = escolher(av, 0.99)
+            if escolhido:
+                return {"cnpj": escolhido["cnpj"], "confianca": "média",
+                        "motivo": "nome único na Região Metropolitana (endereço não confirmado)"}
+            if empate:
+                return {"cnpj": None, "motivo": f"{empate} com esse nome; falta endereço para escolher"}
+    return {"cnpj": None,
+            "motivo": motivo_endereco or "nenhum estabelecimento compatível na base da Receita"}
 
 
 def descobrir(con, cfg: dict, hoje: dt.date | None = None, limite: int = 200) -> list[dict]:
@@ -312,11 +371,14 @@ def descobrir(con, cfg: dict, hoje: dt.date | None = None, limite: int = 200) ->
           AND e.inicio <= ?
           AND m.porte IN ({q(len(portes))})
           AND m.capital <= ?
+          AND m.natureza NOT LIKE '1%'          -- administração pública
+          AND m.natureza NOT IN ('2046')        -- S.A. de capital aberto
           AND ((e.municipio_norm = ? AND e.bairro_norm IN ({q(len(regioes))}))
                OR e.municipio_norm IN ({q(len(regioes))}))
-        ORDER BY unidades DESC, m.capital DESC
+          AND (SELECT COUNT(*) FROM estab x WHERE x.basico = e.basico) <= ?
+        ORDER BY unidades DESC, m.capital DESC, e.basico, e.matriz DESC
     """, (*cnaes, corte, *portes, filtros.get("capital_social_maximo", 1e18),
-          cidade, *regioes, *regioes)).fetchall()
+          cidade, *regioes, *regioes, filtros.get("unidades_maximas", 10))).fetchall()
 
     setor_por_cnae = {c: s for s, lista in cfg["cnaes_por_setor"].items() for c in lista}
     vistos, saida = set(), []
@@ -324,7 +386,10 @@ def descobrir(con, cfg: dict, hoje: dt.date | None = None, limite: int = 200) ->
         if e["basico"] in vistos:
             continue
         vistos.add(e["basico"])
-        nome = (e["fantasia"] or e["razao"] or "").title()
+        fantasia = e["fantasia"] or ""
+        if not tokens_nome(fantasia) or re.match(r"(unidade|filial|loja)\b", normalizar(fantasia)):
+            fantasia = ""  # nome de unidade não identifica a empresa
+        nome = (fantasia or e["razao"] or "").title()
         saida.append({
             "empresa": nome,
             "cnpj": e["cnpj"],

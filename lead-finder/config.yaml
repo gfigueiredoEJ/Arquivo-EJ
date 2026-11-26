@@ -26,6 +26,7 @@ regioes_prioritarias:                     # PREENCHER
 filtros:
   portes: [ME, EPP]                       # porte na Receita; "DEMAIS" vira alerta, não exclusão
   capital_social_maximo: 10000000         # acima disso, considera empresa grande
+  unidades_maximas: 10                    # redes maiores fogem do ticket de R$ 10–20 mil
   anos_minimos_cnpj: 2
   municipios_aceitos:                     # Região Metropolitana do Rio
     - Rio de Janeiro

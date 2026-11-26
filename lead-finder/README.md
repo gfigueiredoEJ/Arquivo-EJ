@@ -56,6 +56,10 @@ pip install -r requirements.txt
 - Porte "DEMAIS" na Receita não exclui a empresa (só indica que ela não declarou ME/EPP);
   a exclusão vem do teto de capital social e do município fora da Região Metropolitana.
 - Sem os anúncios verificados manualmente, a pontuação máxima automática é 75.
+- A base local da Receita não vai para o git (~500 MB): em cada máquina nova, rode
+  `base atualizar` (~40 min, dependendo da conexão com o servidor da Receita).
+- Os dados abertos não ligam empresas do mesmo grupo econômico: subsidiárias de grupos
+  grandes podem aparecer na descoberta. Revise os nomes antes de abordar.
 
 ## Como funciona o cruzamento com a Receita
 `base atualizar` baixa os dados abertos oficiais (compartilhamento da Receita em

@@ -27,6 +27,7 @@ GENERICOS = {
     "odontologia", "odontologica", "odontologico", "odonto", "medica", "medico", "medicina",
     "centro", "consultorio", "servicos", "comercio", "grupo", "rede", "rio", "janeiro", "rj",
     "unidade", "filial", "the", "and", "law", "dr", "dra", "saude", "instituto",
+    "individual", "consultores", "consultoria", "escritorio",
 }
 
 

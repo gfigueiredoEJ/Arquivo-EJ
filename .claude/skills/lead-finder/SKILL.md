@@ -32,6 +32,9 @@ Descobrir empresas direto na Receita (por CNAE do `cnaes_por_setor` e bairro), s
 python -m leadfinder buscar --fonte receita --limite 50
 ```
 Com a chave do Google Places na mesma busca, o script completa site, telefone e avaliações.
+A descoberta exclui S.A. de capital aberto, órgãos públicos e redes com mais de
+`unidades_maximas` estabelecimentos. Ela **não** detecta subsidiárias de grupos grandes
+(ex.: uma "Clínica Ltda" de um grupo listado em bolsa): revise os nomes antes de abordar.
 
 Com a chave da API oficial do Google Places:
 ```bash

@@ -81,9 +81,10 @@ def sugerir_abordagem(lead: dict, servico: str) -> str:
 
 
 def _nomes_batem(lead: dict) -> bool:
-    a = tokens_nome(lead.get("empresa"))
-    b = tokens_nome(f"{lead.get('razao_social')} {lead.get('nome_fantasia')}")
-    return not a or bool(a & b)
+    """Mesmo critério do cruzamento com a Receita: palavras distintivas ou sigla."""
+    cand = {"fantasia": lead.get("nome_fantasia") or "", "razao": lead.get("razao_social") or ""}
+    sim = receita_base._similaridade(lead.get("empresa") or "", cand)
+    return sim is None or sim > 0
 
 
 def candidatos_places(cfg: dict, chave: str, http, log=print) -> list[dict]:
@@ -155,7 +156,7 @@ def enriquecer(candidato: dict, cfg: dict, http, leitor: LeitorSite, hoje: dt.da
     fontes = []
     if candidato.get("place_id"):
         fontes.append(f"Google Maps (Places API), {data}")
-    elif candidato.get("fonte"):
+    elif candidato.get("fonte") and not candidato["fonte"].startswith("Receita Federal"):
         fontes.append(f"{candidato['fonte']}, {data}")
     pendencias = []
 
