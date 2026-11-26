@@ -1,0 +1,36 @@
+# Perfil de cliente ideal (ICP) da Ejota. Ajuste antes de rodar.
+# Itens marcados com PREENCHER ainda são sugestões.
+
+servico: "mapeamento de processos"        # PREENCHER: serviço oferecido
+ticket: {min: 10000, max: 20000}
+
+cidade: "Rio de Janeiro"
+
+# Cada setor é combinado com cada região numa busca do Google Maps.
+# Clínicas aparecem fortes em todas as fontes do estudo de mercado (Etapa 1).
+setores:                                  # PREENCHER
+  - clínica odontológica
+  - clínica médica
+  - escritório de advocacia
+
+regioes_prioritarias:                     # PREENCHER
+  - Barra da Tijuca
+  - Botafogo
+  - Copacabana
+  - Ipanema
+  - Leblon
+  - Centro
+  - Tijuca
+  - Niterói
+
+filtros:
+  portes: [ME, EPP]                       # porte na Receita Federal
+  anos_minimos_cnpj: 2
+  # Número de funcionários (5 a 100) não está em dados públicos: conferir no LinkedIn.
+
+pontuacao:
+  capital_social_minimo: 100000           # PREENCHER
+  avaliacoes_minimas: 100                 # PREENCHER
+  nota_minima: 4.2
+
+max_resultados_por_busca: 20              # cada busca custa uma chamada à Places API
