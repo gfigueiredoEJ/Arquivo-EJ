@@ -24,8 +24,32 @@ regioes_prioritarias:                     # PREENCHER
   - Niterói
 
 filtros:
-  portes: [ME, EPP]                       # porte na Receita Federal
+  portes: [ME, EPP]                       # porte na Receita; "DEMAIS" vira alerta, não exclusão
+  capital_social_maximo: 10000000         # acima disso, considera empresa grande
   anos_minimos_cnpj: 2
+  municipios_aceitos:                     # Região Metropolitana do Rio
+    - Rio de Janeiro
+    - Niterói
+    - São Gonçalo
+    - Duque de Caxias
+    - Nova Iguaçu
+    - Belford Roxo
+    - São João de Meriti
+    - Mesquita
+    - Nilópolis
+    - Queimados
+    - Japeri
+    - Seropédica
+    - Itaguaí
+    - Paracambi
+    - Magé
+    - Guapimirim
+    - Itaboraí
+    - Tanguá
+    - Maricá
+    - Rio Bonito
+    - Cachoeiras de Macacu
+    - Petrópolis
   # Número de funcionários (5 a 100) não está em dados públicos: conferir no LinkedIn.
 
 pontuacao:

@@ -106,10 +106,11 @@ def test_interpretar_descarta_dados_pessoais_e_escolhe_administrador():
 
 def test_motivo_exclusao():
     info = cnpj.interpretar(RECEITA, HOJE)
-    assert cnpj.motivo_exclusao(info, ["ME", "EPP"], 2) is None
-    assert cnpj.motivo_exclusao({**info, "porte": "DEMAIS"}, ["ME", "EPP"], 2) == "porte DEMAIS"
-    assert "anos" in cnpj.motivo_exclusao({**info, "anos_cnpj": 1.0}, ["ME", "EPP"], 2)
-    assert "baixada" in cnpj.motivo_exclusao({**info, "situacao": "BAIXADA"}, ["ME", "EPP"], 2)
+    f = CFG["filtros"]
+    assert cnpj.motivo_exclusao(info, f) is None
+    assert cnpj.motivo_exclusao({**info, "porte": "não informado"}, f) == "porte não informado"
+    assert "anos" in cnpj.motivo_exclusao({**info, "anos_cnpj": 1.0}, f)
+    assert "baixada" in cnpj.motivo_exclusao({**info, "situacao": "BAIXADA"}, f)
 
 
 def test_analise_site_detecta_sinais_e_respeita_robots():
@@ -207,3 +208,116 @@ def test_places_converte_resposta():
     assert r[0]["bairro"] == "Barra da Tijuca" and r[0]["avaliacoes"] == 210
     with pytest.raises(RuntimeError):
         places.buscar("x", "chave", FakeHttp({}))
+
+
+# --- Regressões encontradas na autoanálise ---
+
+def test_regiao_compara_bairro_inteiro():
+    assert scoring.em_regiao_prioritaria({"bairro": "Barra da Tijuca"}, ["Tijuca"]) is None
+    assert scoring.em_regiao_prioritaria({"bairro": "Tijuca"}, ["Tijuca"]) == "Tijuca"
+    lead = {"bairro": "Recreio", "endereco": "Av. X, 100 - Centro Empresarial Barra"}
+    assert scoring.em_regiao_prioritaria(lead, ["Centro"]) is None
+    # sem bairro estruturado, procura o bairro como trecho do endereço
+    lead = {"endereco": "R. Visconde de Pirajá, 100 - Ipanema, Rio de Janeiro - RJ"}
+    assert scoring.em_regiao_prioritaria(lead, ["Ipanema"]) == "Ipanema"
+
+
+def test_diretor_tecnico_nao_e_vaga_de_gestao():
+    p = {"https://c.com.br/trabalhe-conosco": "<p>Diretor técnico: Dr. Fulano CRM 123</p>"}
+    assert site.analisar_html(p, "https://c.com.br")["vagas_gestao_site"] is False
+
+
+def test_clinicas_parceiras_nao_sao_unidades():
+    p = {"https://c.com.br": "<p>Atendemos 12 clínicas parceiras</p>"}
+    assert site.analisar_html(p, "https://c.com.br")["unidades_site"] is None
+    p = {"https://c.com.br": "<p>Já são 4 unidades no Rio</p>"}
+    assert site.analisar_html(p, "https://c.com.br")["unidades_site"] == 4
+
+
+def test_pagina_de_vagas_tem_prioridade():
+    home = ('<a href="/sobre">s</a><a href="/contato">c</a><a href="/quem-somos">q</a>'
+            '<a href="/trabalhe-conosco">t</a>')
+    assert site.links_internos(home, "https://c.com.br")[0].endswith("/trabalhe-conosco")
+
+
+def test_excel_nao_executa_formula(tmp_path):
+    from openpyxl import load_workbook
+    lead = pipeline.calcular({"empresa": '=HYPERLINK("http://x","a")', "capital_social": 200000,
+                              "bairro": "Leblon", "unidades_site": 3, "fontes": []}, CFG)
+    arq = report.salvar([lead], str(tmp_path))["xlsx"]
+    ws = load_workbook(arq)["Leads A e B"]
+    assert ws["A2"].data_type == "s"
+
+
+def test_robots_403_bloqueia():
+    base = "https://fechado.com.br"
+    http = FakeHttp({base + "/robots.txt": Resp(403), base: Resp(text="<p>oi</p>")})
+    r = site.LeitorSite(http).analisar(base)
+    assert "robots" in r["erro_site"]
+    assert http.pedidos == [base + "/robots.txt"]
+
+
+def test_repontuar_aceita_csv_do_excel_brasileiro(tmp_path):
+    arq = tmp_path / "excel.csv"
+    arq.write_text("empresa;bairro;capital_social;anuncios_meses;vagas_gestao\n"
+                   "Clínica Y;Leblon;150000,00;6;sim\n", encoding="cp1252")
+    lead = pipeline.calcular(report.carregar_csv(str(arq))[0], CFG)
+    assert lead["empresa"] == "Clínica Y"
+    assert lead["pontuacao"] == 25 + 15 + 10 + 10
+
+
+def test_brasilapi_429_tenta_de_novo():
+    url = cnpj.BRASILAPI_URL.format(cnpj=CNPJ_TESTE)
+
+    class Instavel(FakeHttp):
+        def get(self, u, **kw):
+            self.pedidos.append(u)
+            return Resp(429) if len(self.pedidos) == 1 else Resp(text=json.dumps(RECEITA))
+
+    http = Instavel({})
+    assert cnpj.buscar_cnpj(CNPJ_TESTE, http, espera=0)["razao_social"]
+    assert http.pedidos == [url, url]
+
+
+# --- Regressões do teste com empresas reais ---
+
+def test_nome_generico_nao_confirma_cnpj():
+    lead = {"empresa": "BCW Advogados", "razao_social": "BALDISSERA CONTE E WEISS ADVOGADOS ASSOCIADOS",
+            "nome_fantasia": ""}
+    assert not pipeline._nomes_batem(lead)
+    lead = {"empresa": "Sorriso Carioca", "razao_social": "CLINICA SORRISO CARIOCA LTDA"}
+    assert pipeline._nomes_batem(lead)
+
+
+def test_municipio_fora_da_regiao_metropolitana_exclui():
+    info = cnpj.interpretar({**RECEITA, "municipio": "JOACABA"}, HOJE)
+    assert "Joacaba" in cnpj.motivo_exclusao(info, CFG["filtros"])
+    info = cnpj.interpretar({**RECEITA, "municipio": "NITEROI"}, HOJE)
+    assert cnpj.motivo_exclusao(info, CFG["filtros"]) is None
+
+
+def test_porte_demais_so_exclui_se_capital_for_de_empresa_grande():
+    pequena = cnpj.interpretar({**RECEITA, "codigo_porte": 5, "capital_social": 100000}, HOJE)
+    assert cnpj.motivo_exclusao(pequena, CFG["filtros"]) is None
+    assert cnpj.alerta_porte(pequena)
+    grande = cnpj.interpretar({**RECEITA, "codigo_porte": 5, "capital_social": 50_000_000}, HOJE)
+    assert "capital" in cnpj.motivo_exclusao(grande, CFG["filtros"])
+
+
+def test_link_so_conta_se_for_o_nome_da_pagina():
+    home = '<a href="/procedimentos_lentes_de_contato.php">x</a><a href="/contato">c</a>'
+    assert site.links_internos(home, "https://c.com.br") == ["https://c.com.br/contato"]
+
+
+def test_cep_diferente_do_maps_gera_alerta(tmp_path):
+    entrada = tmp_path / "e.csv"
+    entrada.write_text(
+        "empresa,endereco,cnpj\n"
+        f"Sorriso Carioca,\"Av. das Américas, 500 - Barra da Tijuca, Rio de Janeiro - RJ, 22640-100\",{CNPJ_TESTE}\n",
+        encoding="utf-8")
+    rotas = {cnpj.BRASILAPI_URL.format(cnpj=CNPJ_TESTE): Resp(text=json.dumps({**RECEITA, "cep": "95520000"}))}
+    lead = pipeline.coletar(CFG, FakeHttp(rotas), entrada=str(entrada), hoje=HOJE, log=lambda *_: None)[0]
+    assert any("CEP" in p for p in lead["pendencias"])
+    rotas = {cnpj.BRASILAPI_URL.format(cnpj=CNPJ_TESTE): Resp(text=json.dumps({**RECEITA, "cep": "22640100"}))}
+    lead = pipeline.coletar(CFG, FakeHttp(rotas), entrada=str(entrada), hoje=HOJE, log=lambda *_: None)[0]
+    assert not any("CEP" in p for p in lead["pendencias"])

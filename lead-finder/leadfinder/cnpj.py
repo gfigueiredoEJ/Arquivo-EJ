@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import time
+import unicodedata
 
 BRASILAPI_URL = "https://brasilapi.com.br/api/cnpj/v1/{cnpj}"
 
@@ -61,11 +63,18 @@ def formatar_cnpj(cnpj: str) -> str:
     return f"{c[:2]}.{c[2:5]}.{c[5:8]}/{c[8:12]}-{c[12:]}"
 
 
-def buscar_cnpj(cnpj: str, http) -> dict | None:
-    resp = http.get(BRASILAPI_URL.format(cnpj=somente_digitos(cnpj)))
-    if resp is None or resp.status_code != 200:
-        return None
-    return resp.json()
+def buscar_cnpj(cnpj: str, http, tentativas: int = 3, espera: float = 5.0) -> dict | None:
+    """Consulta a BrasilAPI, tentando de novo em limite de requisições (429) ou erro do servidor."""
+    url = BRASILAPI_URL.format(cnpj=somente_digitos(cnpj))
+    for i in range(tentativas):
+        resp = http.get(url)
+        if resp is not None and resp.status_code == 200:
+            return resp.json()
+        if resp is not None and resp.status_code not in (429, 500, 502, 503, 504):
+            return None  # 404 etc.: CNPJ realmente não encontrado
+        if i < tentativas - 1:
+            time.sleep(espera * (i + 1))
+    raise RuntimeError(f"BrasilAPI indisponível para o CNPJ {formatar_cnpj(cnpj)}")
 
 
 def _titulo(nome: str) -> str:
@@ -110,18 +119,41 @@ def interpretar(dados: dict, hoje: dt.date | None = None) -> dict:
         "situacao": dados.get("descricao_situacao_cadastral") or "",
         "bairro_receita": _titulo(dados.get("bairro") or ""),
         "municipio": _titulo(dados.get("municipio") or ""),
+        "cep_receita": somente_digitos(dados.get("cep") or ""),
         "matriz_filial": dados.get("descricao_identificador_matriz_filial") or "",
         "decisor": decisor,
         "cargo": cargo,
     }
 
 
-def motivo_exclusao(info: dict, portes: list[str], anos_minimos: float) -> str | None:
-    """Motivo para descartar a empresa pelo perfil, ou None se ela passa."""
+def _sem_acento(texto: str) -> str:
+    return unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode().lower()
+
+
+def motivo_exclusao(info: dict, filtros: dict) -> str | None:
+    """Motivo para descartar a empresa pelo perfil, ou None se ela passa.
+
+    Porte "DEMAIS" na Receita não exclui sozinho: significa só que a empresa não
+    declarou enquadramento como ME/EPP. O teto de capital social pega as grandes.
+    """
     if info["situacao"] and info["situacao"].upper() != "ATIVA":
         return f"CNPJ {info['situacao'].lower()}"
-    if info["porte"] not in portes:
+    aceitos = {_sem_acento(m) for m in filtros.get("municipios_aceitos", [])}
+    if aceitos and info.get("municipio") and _sem_acento(info["municipio"]) not in aceitos:
+        return f"fora da Região Metropolitana do Rio ({info['municipio']})"
+    teto = filtros.get("capital_social_maximo")
+    if teto and info["capital_social"] > teto:
+        return f"capital social acima de R$ {teto:,.0f}".replace(",", ".")
+    portes = filtros.get("portes", ["ME", "EPP"])
+    if info["porte"] not in portes and info["porte"] != "DEMAIS":
         return f"porte {info['porte']}"
-    if info["anos_cnpj"] is not None and info["anos_cnpj"] < anos_minimos:
+    anos = filtros.get("anos_minimos_cnpj", 0)
+    if info["anos_cnpj"] is not None and info["anos_cnpj"] < anos:
         return f"CNPJ com {info['anos_cnpj']} anos"
+    return None
+
+
+def alerta_porte(info: dict) -> str | None:
+    if info.get("porte") == "DEMAIS":
+        return "porte DEMAIS na Receita (sem enquadramento ME/EPP): conferir nº de funcionários"
     return None

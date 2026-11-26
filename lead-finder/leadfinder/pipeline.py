@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import io
+import re
 from collections import Counter
 from urllib.parse import quote_plus
 
@@ -12,6 +14,7 @@ from .scoring import normalizar, pontuar
 from .site import LeitorSite, dominio
 
 NF = "não encontrado"
+CEP_RE = re.compile(r"\b\d{5}-?\d{3}\b")
 
 # Campos que a equipe preenche à mão (LinkedIn, Instagram e bibliotecas de anúncios
 # não permitem coleta automatizada).
@@ -75,7 +78,11 @@ def sugerir_abordagem(lead: dict, servico: str) -> str:
 
 
 def _nomes_batem(lead: dict) -> bool:
-    ignorar = {"ltda", "me", "epp", "eireli", "sa", "s/a", "de", "da", "do", "e", "&"}
+    # Palavras de tipo societário ou de setor não identificam a empresa.
+    ignorar = {"ltda", "me", "epp", "eireli", "sa", "s/a", "de", "da", "do", "das", "dos", "e",
+               "&", "advogados", "advocacia", "associados", "sociedade", "clinica", "clinicas",
+               "odontologia", "odontologica", "odonto", "medica", "medicina", "centro",
+               "consultorio", "servicos", "comercio", "grupo", "rede", "rio", "janeiro"}
     a = set(normalizar(lead.get("empresa")).split()) - ignorar
     b = set(normalizar(f"{lead.get('razao_social')} {lead.get('nome_fantasia')}").split()) - ignorar
     return not a or bool(a & b)
@@ -98,9 +105,21 @@ def candidatos_places(cfg: dict, chave: str, http, log=print) -> list[dict]:
     return lista
 
 
+def ler_csv(caminho: str) -> list[dict]:
+    """Lê CSV salvo pelo Excel em português (';' e cp1252) ou em UTF-8 com ','."""
+    try:
+        with open(caminho, encoding="utf-8-sig") as f:
+            conteudo = f.read()
+    except UnicodeDecodeError:
+        with open(caminho, encoding="cp1252") as f:
+            conteudo = f.read()
+    cabecalho = conteudo.split("\n", 1)[0]
+    separador = ";" if cabecalho.count(";") > cabecalho.count(",") else ","
+    return list(csv.DictReader(io.StringIO(conteudo), delimiter=separador))
+
+
 def candidatos_csv(caminho: str) -> list[dict]:
-    with open(caminho, newline="", encoding="utf-8-sig") as f:
-        linhas = list(csv.DictReader(f))
+    linhas = ler_csv(caminho)
     numericos = {"nota": float, "avaliacoes": int, "unidades_maps": int}
     for linha in linhas:
         for campo, tipo in numericos.items():
@@ -135,15 +154,27 @@ def enriquecer(candidato: dict, cfg: dict, http, leitor: LeitorSite, hoje: dt.da
         numero = lead["cnpjs_site"][0]
     lead["excluido"] = None
     if numero:
-        dados = receita.buscar_cnpj(numero, http)
+        try:
+            dados = receita.buscar_cnpj(numero, http)
+        except RuntimeError as erro:
+            dados = None
+            pendencias.append(f"{erro}: rodar de novo mais tarde")
         if dados:
             lead.update(receita.interpretar(dados, hoje))
             fontes.append(f"Receita Federal (dados abertos via BrasilAPI), {data}")
-            f = cfg["filtros"]
-            lead["excluido"] = receita.motivo_exclusao(lead, f["portes"], f["anos_minimos_cnpj"])
+            lead["excluido"] = receita.motivo_exclusao(lead, cfg["filtros"])
+            alerta = receita.alerta_porte(lead)
+            if alerta and not lead["excluido"]:
+                pendencias.append(alerta)
             if not _nomes_batem(lead):
-                pendencias.append("conferir se o CNPJ do site é mesmo desta empresa")
-        else:
+                pendencias.append("nome na Receita não bate com o nome da empresa: conferir o CNPJ")
+            cep_maps = CEP_RE.search(lead.get("endereco") or "")
+            cep_receita = lead.get("cep_receita") or ""
+            if cep_maps and cep_receita and receita.somente_digitos(cep_maps.group())[:5] != cep_receita[:5]:
+                pendencias.append(
+                    f"CEP da Receita ({cep_receita}) difere do endereço ({cep_maps.group()}): "
+                    "conferir se é filial ou outra empresa")
+        elif not pendencias or "BrasilAPI" not in pendencias[-1]:
             pendencias.append("CNPJ não encontrado na Receita")
     else:
         pendencias.append("CNPJ não encontrado (procurar no rodapé do site ou em notas fiscais públicas)")

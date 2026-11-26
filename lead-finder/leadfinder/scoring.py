@@ -1,6 +1,7 @@
 """Pontuação de capacidade de investimento (0 a 100) e classe A/B/C."""
 from __future__ import annotations
 
+import re
 import unicodedata
 
 PONTOS = {
@@ -20,15 +21,22 @@ def normalizar(texto: str) -> str:
 
 
 def em_regiao_prioritaria(lead: dict, regioes: list[str]) -> str | None:
-    local = normalizar(
-        " ".join(
-            str(lead.get(c) or "")
-            for c in ("bairro", "bairro_receita", "endereco", "municipio", "municipio_maps")
-        )
-    )
+    """Compara o bairro (ou município) inteiro, para que "Tijuca" não case com
+    "Barra da Tijuca" nem "Centro" com "Centro Empresarial"."""
+    locais = {
+        normalizar(str(lead.get(c)))
+        for c in ("bairro", "bairro_receita", "municipio", "municipio_maps")
+        if lead.get(c)
+    }
     for r in regioes:
-        if normalizar(r) in local:
+        if normalizar(r) in locais:
             return r
+    if not (lead.get("bairro") or lead.get("bairro_receita")) and lead.get("endereco"):
+        # Formato do Google: "Rua X, 100 - Bairro, Cidade - UF"
+        trechos = {normalizar(t) for t in re.split(r"\s+-\s+|,", lead["endereco"])}
+        for r in regioes:
+            if normalizar(r) in trechos:
+                return r
     return None
 
 

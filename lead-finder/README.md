@@ -42,7 +42,10 @@ pip install -r requirements.txt
 
 ## Limitações
 - Número de funcionários não é público: conferir no LinkedIn.
-- Se o site não mostra o CNPJ, o campo fica "não encontrado"; informe o CNPJ na lista de entrada.
+- A maioria dos sites de PME não publica o CNPJ (0 de 5 no teste real). Nesses casos o
+  campo fica "não encontrado" até alguém confirmar o CNPJ e informá-lo na lista de entrada.
+- Porte "DEMAIS" na Receita não exclui a empresa (só indica que ela não declarou ME/EPP);
+  a exclusão vem do teto de capital social e do município fora da Região Metropolitana.
 - Sem os anúncios verificados manualmente, a pontuação máxima automática é 75.
 
 ## Testes

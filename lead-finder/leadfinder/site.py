@@ -35,12 +35,20 @@ META_PIXEL = ["connect.facebook.net/en_us/fbevents.js", "fbq('init'", 'fbq("init
 GOOGLE_ADS_RE = re.compile(r"AW-\d{6,}|googleadservices\.com")
 
 PAGINAS_EXTRAS_RE = re.compile(
-    r"contato|fale-conosco|trabalhe|carreira|vagas|unidades|onde-estamos|sobre|quem-somos",
+    r"/(?:contato|fale-conosco|trabalhe|carreira|vagas|unidades|onde-estamos|sobre|quem-somos)",
     re.I,
 )
 VAGAS_RE = re.compile(r"trabalhe[\s-]conosco|carreiras?|vagas", re.I)
-GESTAO_RE = re.compile(r"\b(gerente|coordenador[a]?|supervisor[a]?|gestor[a]?|diretor[a]?)\b", re.I)
-UNIDADES_RE = re.compile(r"\b(\d{1,3})\s+(?:unidades|lojas|filiais|clínicas|clinicas)\b", re.I)
+# "Diretor" fica de fora: sites de clínica trazem "Diretor técnico" no rodapé por exigência legal.
+GESTAO_RE = re.compile(r"\b(gerente|coordenador[a]?|supervisor[a]?|gestor[a]?)\b", re.I)
+# "12 clínicas parceiras" ou "lojas credenciadas" não são unidades próprias.
+UNIDADES_RE = re.compile(
+    r"\b(\d{1,3})\s+(?:unidades|lojas|filiais|clínicas|clinicas)\b"
+    r"(?!\s+(?:parceir|credenciad|conveniad|atendid|cliente))",
+    re.I,
+)
+# Ordem de visita das páginas internas: as que geram pontos primeiro.
+PRIORIDADE_PAGINAS = [VAGAS_RE, re.compile(r"unidades|onde-estamos", re.I)]
 NOSSAS_UNIDADES_RE = re.compile(r"nossas\s+(?:unidades|lojas|clínicas|clinicas)", re.I)
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 HREF_RE = re.compile(r"""href\s*=\s*["']([^"'#]+)["']""", re.I)
@@ -66,7 +74,14 @@ def links_internos(pagina: str, base: str) -> list[str]:
         url = urljoin(base, href)
         if dominio(url) == host and PAGINAS_EXTRAS_RE.search(url) and url not in links:
             links.append(url)
-    return links
+
+    def prioridade(url: str) -> int:
+        for i, padrao in enumerate(PRIORIDADE_PAGINAS):
+            if padrao.search(url):
+                return i
+        return len(PRIORIDADE_PAGINAS)
+
+    return sorted(links, key=prioridade)
 
 
 def analisar_html(paginas: dict[str, str], site: str) -> dict:
@@ -120,6 +135,9 @@ class LeitorSite:
             resp = self.http.get(raiz + "/robots.txt")
             if resp is not None and resp.status_code == 200:
                 rp.parse(resp.text.splitlines())
+                self._robots[raiz] = rp
+            elif resp is not None and resp.status_code in (401, 403):
+                rp.disallow_all = True  # convenção do robots.txt: acesso negado = nada liberado
                 self._robots[raiz] = rp
             else:
                 self._robots[raiz] = None  # sem robots.txt: acesso liberado

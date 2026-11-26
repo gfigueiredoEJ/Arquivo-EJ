@@ -40,6 +40,18 @@ O script:
 - filtra por porte (ME/EPP), situação ativa e anos de CNPJ;
 - pontua de 0 a 100 e gera `saida/leads.md`, `saida/leads.xlsx` e `saida/leads_completo.csv`.
 
+## Etapa 2a: achar o CNPJ que faltou
+A maioria dos sites de PME não publica o CNPJ (no teste real, 0 de 5). Para leads B ou
+melhores com "CNPJ não encontrado":
+1. Pesquise na web `"<nome>" CNPJ <bairro>` e `"<endereço com número>" CNPJ`. Sites de
+   consulta pública (cnpja, MonitorCNPJ, EmpresAqui) servem só para achar candidatos.
+2. Cuidado com homônimos: no teste, "BCW Advogados" e "LP Law" deram em escritórios de
+   SC e RS. Só aceite o candidato se o município estiver na Região Metropolitana do Rio
+   **e** o CEP ou o endereço bater com o do Google Maps.
+3. Ponha o CNPJ na coluna `cnpj` de uma lista de entrada e rode `buscar --entrada` de novo:
+   o script revalida na Receita e alerta se nome, município ou CEP não baterem.
+4. Sem confirmação, deixe "não encontrado". Nunca chute.
+
 ## Etapa 2b: verificações manuais (obrigatórias para os leads promissores)
 LinkedIn, Instagram e as bibliotecas de anúncios proíbem coleta automatizada.
 Nunca raspe essas plataformas. Para cada lead B ou A no limite, oriente o usuário a abrir os

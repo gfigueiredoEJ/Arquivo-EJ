@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 
-from .pipeline import CAMPOS_MANUAIS, NF
+from .pipeline import CAMPOS_MANUAIS, NF, ler_csv
 
 COLUNAS_FINAIS = [
     "Empresa", "CNPJ", "Setor", "Bairro", "Site", "Decisor", "Cargo",
@@ -22,7 +23,7 @@ CAMPOS_COMPLETOS = [
     "classe", "pontuacao", "excluido", "empresa", "razao_social", "nome_fantasia", "cnpj",
     "cnae", "cnae_descricao", "porte", "capital_social", "data_abertura", "anos_cnpj",
     "situacao", "setor_busca", "endereco", "bairro", "bairro_receita", "municipio",
-    "municipio_maps", "telefone", "email_corporativo", "site", "nota", "avaliacoes",
+    "municipio_maps", "cep_receita", "telefone", "email_corporativo", "site", "nota", "avaliacoes",
     "unidades_maps", "unidades_site", "pixel_meta", "tag_google_ads", "ferramentas_pagas",
     "pagina_vagas", "vagas_gestao_site", "decisor", "cargo", *CAMPOS_MANUAIS,
     "sinais", "pendencias", "pendencias_manuais", "abordagem", "fontes",
@@ -57,11 +58,20 @@ def qualificados(leads: list[dict]) -> list[dict]:
     return [l for l in leads if not l.get("excluido") and l.get("classe") in ("A", "B")]
 
 
+def _parece_formula(texto: str) -> bool:
+    if texto[:1] in ("=", "@"):
+        return True
+    # "+55 21 3333-4444" é telefone, não fórmula
+    return texto[:1] in ("+", "-") and not re.fullmatch(r"[+-][\d\s().-]+", texto)
+
+
 def _celula(valor):
     if isinstance(valor, list):
-        return "; ".join(str(v) for v in valor)
+        valor = "; ".join(str(v) for v in valor)
     if valor is None:
         return ""
+    if isinstance(valor, str) and _parece_formula(valor):
+        return "'" + valor  # dado vindo da web não pode virar fórmula no Excel
     return valor
 
 
@@ -89,7 +99,7 @@ def salvar(leads: list[dict], pasta: str) -> dict[str, Path]:
     wb = Workbook()
     ws = wb.active
     ws.title = "Leads A e B"
-    _planilha(ws, COLUNAS_FINAIS, [[l[c] for c in COLUNAS_FINAIS] for l in finais])
+    _planilha(ws, COLUNAS_FINAIS, [[_celula(l[c]) for c in COLUNAS_FINAIS] for l in finais])
     ws2 = wb.create_sheet("Todos (revisão)")
     _planilha(ws2, CAMPOS_COMPLETOS,
               [[_celula(l.get(c)) for c in CAMPOS_COMPLETOS] for l in leads])
@@ -117,20 +127,23 @@ def carregar_csv(caminho: str) -> list[dict]:
     booleanos = {"pixel_meta", "tag_google_ads", "pagina_vagas", "vagas_gestao_site",
                  "vagas_gestao", "expansao_recente"}
     leads = []
-    with open(caminho, newline="", encoding="utf-8-sig") as f:
-        for linha in csv.DictReader(f):
-            lead: dict = {}
-            for k, v in linha.items():
-                v = (v or "").strip()
-                if k in numeros:
-                    lead[k] = float(v.replace(",", ".")) if v else None
-                    if lead[k] is not None and lead[k].is_integer() and k != "capital_social":
-                        lead[k] = int(lead[k])
-                elif k in booleanos:
-                    lead[k] = (v.lower() in {"true", "sim", "s", "1", "x", "yes"}) if v else None
-                elif k in LISTAS:
-                    lead[k] = [p.strip() for p in v.split(";") if p.strip()]
-                else:
-                    lead[k] = v or None
-            leads.append(lead)
+    for linha in ler_csv(caminho):
+        lead: dict = {}
+        for k, v in linha.items():
+            v = (v or "").strip()
+            if v.startswith("'"):
+                v = v[1:]  # proteção anti-fórmula gravada por salvar()
+            if k in numeros:
+                if "," in v:  # formato brasileiro: 150.000,00
+                    v = v.replace(".", "").replace(",", ".")
+                lead[k] = float(v) if v else None
+                if lead[k] is not None and lead[k].is_integer() and k != "capital_social":
+                    lead[k] = int(lead[k])
+            elif k in booleanos:
+                lead[k] = (v.lower() in {"true", "sim", "s", "1", "x", "yes"}) if v else None
+            elif k in LISTAS:
+                lead[k] = [p.strip() for p in v.split(";") if p.strip()]
+            else:
+                lead[k] = v or None
+        leads.append(lead)
     return leads
