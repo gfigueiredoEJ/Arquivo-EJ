@@ -332,3 +332,17 @@ def test_nome_por_sigla_confirma_cnpj():
     assert pipeline._nomes_batem(lead)
     lead = {"empresa": "BCW Advogados", "razao_social": "BRANDAO COUTO, WIGDEROWITZ E PESSOA ADVOGADOS"}
     assert pipeline._nomes_batem(lead)
+
+
+def test_email_de_funcao_em_dominio_proprio_diferente_do_site():
+    p = {"https://katzendoimagem.com.br": "<p>contato@katzendo.com.br fulano@gmail.com "
+                                          "joao.silva@katzendo.com.br</p>"}
+    r = site.analisar_html(p, "https://katzendoimagem.com.br")
+    assert r["email_corporativo"] == "contato@katzendo.com.br"
+    p = {"https://x.com.br": "<p>contato@gmail.com</p>"}
+    assert site.analisar_html(p, "https://x.com.br")["email_corporativo"] == ""
+
+
+def test_links_com_e_sem_barra_final_sao_a_mesma_pagina():
+    home = '<a href="/contato/">c</a><a href="/contato">c</a>'
+    assert site.links_internos(home, "https://c.com.br") == ["https://c.com.br/contato/"]

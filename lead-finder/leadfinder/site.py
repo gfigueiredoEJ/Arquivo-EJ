@@ -54,6 +54,13 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 HREF_RE = re.compile(r"""href\s*=\s*["']([^"'#]+)["']""", re.I)
 TAG_RE = re.compile(r"<script.*?</script>|<style.*?</style>|<[^>]+>", re.I | re.S)
 
+EMAILS_DE_FUNCAO = {"contato", "atendimento", "comercial", "financeiro", "sac", "adm",
+                    "administrativo", "administracao", "secretaria", "recepcao", "agendamento",
+                    "faleconosco", "info", "diretoria", "rh", "vendas", "marketing", "ouvidoria"}
+PROVEDORES_GRATUITOS = {"gmail.com", "hotmail.com", "outlook.com", "live.com", "yahoo.com",
+                        "yahoo.com.br", "bol.com.br", "uol.com.br", "icloud.com", "terra.com.br",
+                        "ig.com.br", "globo.com", "msn.com", "protonmail.com"}
+
 USER_AGENT = "EjotaLeadFinder/0.1 (+prospeccao B2B, dados publicos)"
 MAX_PAGINAS = 4
 
@@ -72,7 +79,8 @@ def links_internos(pagina: str, base: str) -> list[str]:
     links = []
     for href in HREF_RE.findall(pagina):
         url = urljoin(base, href)
-        if dominio(url) == host and PAGINAS_EXTRAS_RE.search(url) and url not in links:
+        mesma = {url, url.rstrip("/"), url.rstrip("/") + "/"}
+        if dominio(url) == host and PAGINAS_EXTRAS_RE.search(url) and not mesma & set(links):
             links.append(url)
 
     def prioridade(url: str) -> int:
@@ -105,9 +113,14 @@ def analisar_html(paginas: dict[str, str], site: str) -> dict:
     numeros = [int(n) for n in UNIDADES_RE.findall(texto) if 1 < int(n) < 500]
     unidades = max(numeros) if numeros else (2 if NOSSAS_UNIDADES_RE.search(texto) else None)
 
-    emails = sorted(
-        {e.lower() for e in EMAIL_RE.findall(texto) if host and e.lower().endswith("@" + host)}
-    )
+    encontrados = {e.lower() for e in EMAIL_RE.findall(texto)}
+    # 1º: e-mail no domínio do site; 2º: e-mail de função (contato@, atendimento@...) em
+    # domínio próprio da empresa. Nunca provedor gratuito: pode ser pessoal.
+    emails = sorted(e for e in encontrados if host and e.endswith("@" + host))
+    if not emails:
+        emails = sorted(e for e in encontrados
+                        if e.split("@")[0] in EMAILS_DE_FUNCAO
+                        and e.split("@")[1] not in PROVEDORES_GRATUITOS)
 
     return {
         "cnpjs_site": encontrar_cnpjs(texto),
